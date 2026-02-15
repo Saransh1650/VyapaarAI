@@ -1,17 +1,18 @@
-# Design Document: Retail Analytics AI System
+# Design Document: Retail Analytics AI System (MVP)
 
 ## Overview
 
-AI-powered retail analytics platform with Flutter mobile app for bill scanning, automated ledger management, and intelligent business insights.
+AI-powered retail analytics platform with Flutter mobile app for bill scanning, automated ledger management, and intelligent business insights. This MVP design prioritizes rapid development and deployment while maintaining scalability potential for future growth.
 
-### Core Principles
+### MVP Design Principles
 
-1. **Stateless APIs**: JWT-based REST endpoints for horizontal scaling
-2. **Async AI**: Long-running ML operations via job queue
-3. **Mobile-First**: Flutter app with native camera integration
-4. **Microservices**: Decoupled services for OCR, analytics, and AI
+1. **Modular Monolith**: Single backend API with clear module boundaries for future extraction
+2. **Minimal Infrastructure**: PostgreSQL + optional Redis for async jobs
+3. **Async AI**: Background workers for OCR and ML processing
+4. **Mobile-First**: Flutter app with native camera integration
+5. **Deploy Anywhere**: Docker-based deployment on single server or cloud VM
 
-### Technology Stack
+### Technology Stack (MVP)
 
 **Mobile App:**
 - Flutter for cross-platform iOS/Android
@@ -19,59 +20,111 @@ AI-powered retail analytics platform with Flutter mobile app for bill scanning, 
 - camera plugin for bill scanning
 - http/dio for API calls
 
-**Backend:**
-- Python FastAPI for REST APIs
-- PostgreSQL for ledger data
-- Redis for caching and pub/sub
-- RabbitMQ for async job queue
+**Backend (Modular Monolith):**
+- Node.js + Express or Fastify (single application with modules)
+- PostgreSQL for all data storage
+- Redis (optional) for async job queue
+- Bull or BullMQ for background workers (if using Redis)
+- OR Node.js worker threads (if no Redis)
 
 **AI/ML:**
-- Tesseract OCR for text extraction
-- spaCy for entity extraction
-- Prophet for time-series forecasting
-- scikit-learn for analytics
+- Tesseract.js or node-tesseract-ocr for text extraction
+- compromise or natural for entity extraction
+- Prophet (via Python subprocess) or simple regression for forecasting
+- ml.js or TensorFlow.js for analytics
 
 **Infrastructure:**
-- Docker + Kubernetes
-- AWS S3 for bill images
-- AWS KMS for encryption keys
+- Docker + Docker Compose for local/cloud deployment
+- AWS S3 or local filesystem for bill images
+- Single server deployment (can scale later)
 
 ## Architecture
+
+### Simplified System Diagram
 
 ```
 ┌─────────────────────────────────┐
 │      Flutter Mobile App         │
 │  ┌──────────┐  ┌──────────┐    │
-│  │ Camera   │  │ SQLite   │    │
-│  │ Scanner  │  │ Queue    │    │
+│  │ Camera   │  │ Charts   │    │
+│  │ Scanner  │  │ (fl_chart)│   │
 │  └──────────┘  └──────────┘    │
 └────────┬────────────────────────┘
          │ HTTPS/REST
          │
 ┌────────▼────────────────────────┐
-│      API Gateway (Nginx)        │
-│      JWT Validation             │
-└────┬────┬────┬────┬────┬────────┘
-     │    │    │    │    │
-  ┌──▼─┐┌─▼──┐┌▼──┐┌▼──┐┌▼───┐
-  │Auth││Bill││Led││Ana││AI  │
-  │Svc ││Svc ││Svc││Svc││Svc │
-  └──┬─┘└─┬──┘└┬──┘└┬──┘└┬───┘
-     │    │    │    │    │
-     └────┴────▼────┴────┘
-          PostgreSQL
-               │
-     ┌─────────┴─────────┐
-     │                   │
-  ┌──▼──┐          ┌────▼────┐
-  │Redis│          │RabbitMQ │
-  └─────┘          └────┬────┘
-                        │
-                   ┌────▼────┐
-                   │AI Workers│
-                   │OCR/ML   │
-                   └─────────┘
+│   API Backend (Monolith)        │
+│                                 | 
+│  ┌────────────────────────────┐ │
+│  │  Auth Module               │ │
+│  │  - JWT tokens              │ │
+│  │  - User management         │ │
+│  └────────────────────────────┘ │
+│                                 │
+│  ┌────────────────────────────┐ │
+│  │  Bill Module               │ │
+│  │  - Upload handling         │ │
+│  │  - OCR job creation        │ │
+│  └────────────────────────────┘ │
+│                                 │
+│  ┌────────────────────────────┐ │
+│  │  Ledger Module             │ │
+│  │  - Entry CRUD              │ │
+│  │  - Duplicate detection     │ │
+│  └────────────────────────────┘ │
+│                                 │
+│  ┌────────────────────────────┐ │
+│  │  Analytics Module          │ │
+│  │  - Sales trends            │ │
+│  │  - Product rankings        │ │
+│  │  - Customer activity       │ │
+│  └────────────────────────────┘ │
+│                                 │
+│  ┌────────────────────────────┐ │
+│  │  AI Module                 │ │
+│  │  - Job management          │ │
+│  │  - Result storage          │ │
+│  └────────────────────────────┘ │
+└────────┬────────────────────────┘
+         │
+    ┌────▼────-┐
+    │PostgreSQL│
+    └───-┬──-──┘
+         │
+    ┌────▼────────────────────────┐
+    │  Background Workers         │
+    │  (Celery or Threading)      │
+    │                             │
+    │  ┌──────────┐  ┌─────────┐  │
+    │  │   OCR    │  │Forecast │  │
+    │  │  Worker  │  │ Worker  │  │
+    │  └──────────┘  └─────────┘  │
+    └─────────────────────────────┘
 ```
+
+### Data Flow
+
+**Bill Scanning Flow:**
+1. User captures bill → Mobile app uploads to `/bills/upload`
+2. Backend saves image, creates OCR job record in DB
+3. Background worker picks up job, runs Tesseract OCR
+4. Worker extracts entities, creates ledger entry
+5. Analytics module updates aggregations
+6. Mobile app polls `/bills/{id}/status` or receives push notification
+
+**Analytics Query Flow:**
+1. Mobile app requests `/analytics/sales-trends`
+2. Backend queries PostgreSQL with aggregations
+3. Results returned to mobile app
+4. Mobile app renders charts using fl_chart
+
+**AI Insights Flow:**
+1. User requests forecast → POST `/ai/forecast`
+2. Backend creates job record, returns job ID
+3. Background worker picks up job, runs Prophet model
+4. Worker stores results in DB
+5. Mobile app polls `/ai/jobs/{id}` for completion
+6. Mobile app fetches results and renders forecast
 
 ## Components and Interfaces
 
@@ -79,204 +132,168 @@ AI-powered retail analytics platform with Flutter mobile app for bill scanning, 
 
 **Responsibilities:**
 - Capture bill images via camera
-- Display analytics charts (line, bar, heatmap, forecast)
-- Real-time data updates
+- Upload bills to backend
+- Display analytics charts
+- Poll for job status
 
-**Key Interfaces:**
+**Key Screens:**
+- Bill Scanner (camera integration)
+- Dashboard (sales trends, rankings)
+- Insights (forecasts, inventory alerts)
+- Settings (auth, store selection)
 
-```dart
-class BillScanner {
-  Future<File> captureBill();
-  Future<String> uploadBill(File image);
+### 2. Express/Fastify Backend (Modular Monolith)
+
+**Module Structure:**
+```
+src/
+├── index.js               # Express/Fastify app entry point
+├── config/
+│   └── database.js        # Sequelize/TypeORM setup
+├── auth/
+│   ├── routes.js          # /auth/* endpoints
+│   ├── service.js         # JWT logic
+│   └── models.js          # User model
+├── bills/
+│   ├── routes.js          # /bills/* endpoints
+│   ├── service.js         # Upload, OCR job creation
+│   └── models.js          # Bill model
+├── ledger/
+│   ├── routes.js          # /ledger/* endpoints
+│   ├── service.js         # CRUD, duplicate detection
+│   └── models.js          # LedgerEntry, LineItem models
+├── analytics/
+│   ├── routes.js          # /analytics/* endpoints
+│   ├── service.js         # Aggregation queries
+│   └── calculations.js    # Trend, ranking logic
+├── ai/
+│   ├── routes.js          # /ai/* endpoints
+│   ├── service.js         # Job management
+│   └── models.js          # AIJob, AIResult models
+└── workers/
+    ├── ocrWorker.js       # OCR + entity extraction
+    ├── forecastWorker.js  # Demand forecasting
+    └── inventoryWorker.js # Inventory analysis
+```
+
+**API Endpoints:**
+
+```javascript
+// Auth
+POST   /auth/login
+POST   /auth/refresh
+POST   /auth/logout
+
+// Bills
+POST   /bills/upload
+GET    /bills/:id
+GET    /bills/:id/status
+GET    /bills
+
+// Ledger
+POST   /ledger/entries
+GET    /ledger/entries
+GET    /ledger/entries/:id
+PUT    /ledger/entries/:id
+DELETE /ledger/entries/:id
+
+// Analytics
+GET    /analytics/sales-trends
+GET    /analytics/product-rankings
+GET    /analytics/customer-activity
+
+// AI
+POST   /ai/forecast
+POST   /ai/inventory-analysis
+POST   /ai/festival-recommendations
+GET    /ai/jobs/:id
+GET    /ai/jobs/:id/result
+```
+
+### 3. Background Workers
+
+**OCR Worker:**
+```javascript
+async function processOCRJob(billId) {
+  // 1. Fetch bill from DB
+  const bill = await Bill.findByPk(billId);
+  
+  // 2. Download image from S3 or filesystem
+  const image = await downloadImage(bill.imageUrl);
+  
+  // 3. Run Tesseract.js OCR
+  const { data: { text } } = await Tesseract.recognize(image, 'eng+hin');
+  
+  // 4. Extract entities using regex/NLP
+  const entities = await extractEntities(text);
+  
+  // 5. Create ledger entry
+  const ledgerEntry = await createLedgerEntry(entities, billId);
+  
+  // 6. Update bill status
+  bill.status = 'COMPLETED';
+  await bill.save();
 }
+```
 
-class AnalyticsView {
-  Widget renderSalesTrend(SalesTrendData data);
-  Widget renderProductRanking(List<Product> products);
-  Widget renderForecast(ForecastData forecast);
+**Forecast Worker:**
+```javascript
+async function generateForecast(jobId) {
+  // 1. Fetch job config
+  const job = await AIJob.findByPk(jobId);
+  
+  // 2. Load historical sales data
+  const salesData = await loadSalesData(job.userId, { days: 90 });
+  
+  // 3. Run forecasting model (simple regression or Prophet via Python subprocess)
+  const forecast = await runForecastModel(salesData, job.config.horizon);
+  
+  // 4. Store results
+  await AIResult.create({
+    jobId: job.id,
+    data: forecast
+  });
+  
+  // 5. Update job status
+  job.status = 'COMPLETED';
+  await job.save();
 }
 ```
 
-### 2. Auth Service
-
-**Responsibilities:**
-- Issue/validate JWT tokens
-- Handle login/logout
-- Enforce rate limiting
-
-**API Endpoints:**
-```
-POST /auth/login
-POST /auth/refresh
-POST /auth/logout
-```
-
-### 3. Bill Service
-
-**Responsibilities:**
-- Accept bill image uploads
-- Store in S3 with encryption
-- Create OCR jobs
-
-**API Endpoints:**
-```
-POST /bills/upload
-GET /bills/{id}
-GET /bills/{id}/status
-```
-
-### 4. OCR Worker
-
-**Responsibilities:**
-- Extract text from bill images
-- Preprocess images (deskew, enhance)
-- Return text with confidence scores
-
-**Process:**
-1. Fetch image from S3
-2. Preprocess (deskew, denoise, contrast)
-3. Run Tesseract OCR
-4. Return text + confidence
-
-### 5. Entity Extractor
-
-**Responsibilities:**
-- Parse OCR text for entities
-- Extract products, prices, dates, merchant
-- Validate totals
-
-**Logic:**
-```python
-def extract_entities(ocr_text):
-    # Regex patterns for prices, dates
-    products = extract_products(ocr_text)
-    prices = extract_prices(ocr_text)
-    date = extract_date(ocr_text)
-    total = extract_total(ocr_text)
-    
-    # Validate sum of line items = total
-    if abs(sum(prices) - total) > 0.01:
-        flag_for_review = True
-    
-    return ExtractedEntities(...)
-```
-
-### 6. Ledger Service
-
-**Responsibilities:**
-- Create/update/delete ledger entries
-- Detect duplicate bills
-- Maintain audit logs
-
-**API Endpoints:**
-```
-POST /ledger/entries
-GET /ledger/entries
-PUT /ledger/entries/{id}
-DELETE /ledger/entries/{id}
-GET /ledger/entries/{id}/audit
-```
-
-### 7. Analytics Engine
-
-**Responsibilities:**
-- Calculate sales trends, rankings, activity
-- Cache results in Redis
-- Trigger real-time updates
-
-**Calculations:**
-```python
-def calculate_sales_trend(user_id, start_date, end_date, aggregation):
-    # Query ledger entries
-    entries = db.query(LedgerEntry).filter(...)
-    
-    # Aggregate by day/week/month
-    if aggregation == 'daily':
-        groups = group_by_day(entries)
-    elif aggregation == 'weekly':
-        groups = group_by_week(entries)
-    else:
-        groups = group_by_month(entries)
-    
-    # Calculate growth rates
-    for i in range(1, len(groups)):
-        growth = (groups[i] - groups[i-1]) / groups[i-1] * 100
-        groups[i].growth = growth
-    
-    return groups
-```
-
-### 8. AI Insights Service
-
-**Responsibilities:**
-- Manage async AI jobs
-- Coordinate workers
-- Store/retrieve results
-
-**API Endpoints:**
-```
-POST /ai/forecast
-POST /ai/inventory-analysis
-POST /ai/festival-recommendations
-GET /ai/jobs/{id}
-GET /ai/jobs/{id}/result
-```
-
-### 9. Forecast Worker
-
-**Responsibilities:**
-- Run Prophet/LSTM/Regression models
-- Generate predictions with confidence intervals
-- Evaluate model accuracy
-
-**Process:**
-```python
-def generate_forecast(historical_data, horizon, model_type):
-    if model_type == 'prophet':
-        model = Prophet()
-        model.fit(historical_data)
-        future = model.make_future_dataframe(periods=horizon)
-        forecast = model.predict(future)
-    elif model_type == 'lstm':
-        model = build_lstm_model()
-        model.fit(historical_data)
-        forecast = model.predict(horizon)
-    else:
-        model = LinearRegression()
-        model.fit(historical_data)
-        forecast = model.predict(horizon)
-    
-    return forecast
-```
-
-### 10. Inventory Analysis Worker
-
-**Responsibilities:**
-- Calculate moving averages
-- Detect low-stock conditions
-- Generate reorder recommendations
-
-**Logic:**
-```python
-def analyze_inventory(product_id, window=7):
-    sales = get_sales_data(product_id, days=90)
-    
-    # Calculate moving average
-    ma = moving_average(sales, window)
-    
-    # Calculate sales velocity
-    velocity = mean(sales[-window:])
-    
-    # Estimate days until exhaustion
-    current_stock = get_current_stock(product_id)
-    days_left = current_stock / velocity if velocity > 0 else float('inf')
-    
-    # Generate alert if < threshold
-    if days_left < 14:
-        alert = True
-        reorder_qty = velocity * (lead_time + safety_buffer)
-    
-    return InventoryInsight(...)
+**Inventory Analysis Worker:**
+```javascript
+async function analyzeInventory(jobId) {
+  // 1. Fetch job config
+  const job = await AIJob.findByPk(jobId);
+  
+  // 2. Load sales data
+  const sales = await loadProductSales(job.config.productId, { days: 30 });
+  
+  // 3. Calculate moving average
+  const ma7d = movingAverage(sales, 7);
+  const ma14d = movingAverage(sales, 14);
+  
+  // 4. Calculate velocity
+  const velocity = mean(sales.slice(-7));
+  
+  // 5. Estimate exhaustion
+  const currentStock = await getCurrentStock(job.config.productId);
+  const daysLeft = velocity > 0 ? currentStock / velocity : Infinity;
+  
+  // 6. Generate alert if needed
+  if (daysLeft < 14) {
+    await createLowStockAlert({ productId: job.config.productId, daysLeft });
+  }
+  
+  // 7. Store results
+  await AIResult.create({
+    jobId: job.id,
+    data: { ma7d, ma14d, velocity, daysLeft }
+  });
+  
+  job.status = 'COMPLETED';
+  await job.save();
+}
 ```
 
 ## Data Models
@@ -286,7 +303,7 @@ def analyze_inventory(product_id, window=7):
 ```sql
 -- Users
 CREATE TABLE users (
-  id UUID PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   username VARCHAR(255) UNIQUE NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
   email VARCHAR(255) UNIQUE NOT NULL,
@@ -295,47 +312,69 @@ CREATE TABLE users (
 
 -- Stores
 CREATE TABLE stores (
-  id UUID PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id),
   name VARCHAR(255) NOT NULL,
   region VARCHAR(100)
 );
 
--- Ledger Entries
-CREATE TABLE ledger_entries (
-  id UUID PRIMARY KEY,
+-- Bills
+CREATE TABLE bills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id),
   store_id UUID REFERENCES stores(id),
-  bill_id UUID NOT NULL,
+  image_url TEXT NOT NULL,
+  ocr_text TEXT,
+  status VARCHAR(50) DEFAULT 'UPLOADED',
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Ledger Entries
+CREATE TABLE ledger_entries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  store_id UUID REFERENCES stores(id),
+  bill_id UUID REFERENCES bills(id),
   transaction_date TIMESTAMP NOT NULL,
   total_amount DECIMAL(10, 2) NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW(),
-  edited_manually BOOLEAN DEFAULT FALSE
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
 -- Line Items
 CREATE TABLE line_items (
-  id UUID PRIMARY KEY,
-  ledger_entry_id UUID REFERENCES ledger_entries(id),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ledger_entry_id UUID REFERENCES ledger_entries(id) ON DELETE CASCADE,
   product_name VARCHAR(255) NOT NULL,
   quantity DECIMAL(10, 2) NOT NULL,
   unit_price DECIMAL(10, 2) NOT NULL,
   total_price DECIMAL(10, 2) NOT NULL
 );
 
+-- AI Jobs
+CREATE TABLE ai_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  job_type VARCHAR(50) NOT NULL,
+  config JSONB NOT NULL,
+  status VARCHAR(50) DEFAULT 'QUEUED',
+  created_at TIMESTAMP DEFAULT NOW(),
+  completed_at TIMESTAMP
+);
+
+-- AI Results
+CREATE TABLE ai_results (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id UUID REFERENCES ai_jobs(id),
+  data JSONB NOT NULL,
+  confidence DECIMAL(3, 2),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes
 CREATE INDEX idx_ledger_user_date ON ledger_entries(user_id, transaction_date);
 CREATE INDEX idx_line_items_product ON line_items(product_name);
-```
-
-### SQLite Schema (Mobile App)
-
-```sql
--- Cached Analytics
-CREATE TABLE analytics_cache (
-  cache_key TEXT PRIMARY KEY,
-  data TEXT NOT NULL,
-  expires_at INTEGER NOT NULL
-);
+CREATE INDEX idx_bills_user_status ON bills(user_id, status);
+CREATE INDEX idx_ai_jobs_status ON ai_jobs(status);
 ```
 
 ## Correctness Properties
@@ -392,7 +431,7 @@ CREATE TABLE analytics_cache (
 
 ### Property 13: Data Encryption
 *For any* sensitive data (bills, ledger, prices), Storage_Service should encrypt with AES-256.
-**Validates: Requirements 3.3, 14.4, 15.1, 15.2**
+**Validates: Requirements 3.3, 13.4, 14.1, 14.2**
 
 ### Property 14: Duplicate Bill Detection
 *For any* previously scanned bill, re-scanning should be detected and not create duplicate entry.
@@ -642,10 +681,9 @@ CREATE TABLE analytics_cache (
 ### Dual Testing Approach
 
 **Unit Tests:**
-- Specific examples and edge cases
-- Error conditions
-- Integration points
-- Mock external dependencies
+- Module-level tests for each backend module
+- Mock database and external dependencies
+- Test specific examples and edge cases
 - Target: 80% code coverage
 
 **Property-Based Tests:**
@@ -656,20 +694,133 @@ CREATE TABLE analytics_cache (
 
 ### Framework Selection
 - **Flutter/Dart**: faker for test data generation
-- **Python**: Hypothesis for property-based testing
-- **Unit tests**: pytest, Flutter test
+- **Node.js**: fast-check for property-based testing, Jest/Mocha for unit tests
 
 ### Test Layers
-1. **Unit**: Component-level, mocked dependencies
-2. **Integration**: Component interactions, test DB
+1. **Unit**: Module-level, mocked dependencies
+2. **Integration**: Module interactions, test DB
 3. **Property**: Universal properties, randomized inputs
 4. **E2E**: Complete workflows, staging environment
-5. **Performance**: Load/stress testing
-6. **Security**: Penetration testing, encryption verification
 
 ### CI Pipeline
 1. Unit tests on every commit
 2. Integration tests on PRs
 3. Property tests nightly
 4. E2E tests before deployment
-5. Block merge if tests fail or coverage drops
+
+## Deployment
+
+### MVP Deployment (Single Server)
+
+**Docker Compose Setup:**
+```yaml
+version: '3.8'
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:pass@db:5432/retail_analytics
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - db
+      - redis
+  
+  worker:
+    build: ./backend
+    command: node src/workers/index.js
+    environment:
+      - DATABASE_URL=postgresql://user:pass@db:5432/retail_analytics
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - db
+      - redis
+  
+  db:
+    image: postgres:15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=pass
+      - POSTGRES_DB=retail_analytics
+  
+  redis:
+    image: redis:7
+    
+volumes:
+  postgres_data:
+```
+
+**Deployment Options:**
+- Local: `docker-compose up`
+- Cloud VM: AWS EC2, DigitalOcean Droplet, Google Compute Engine
+- Platform: Railway, Render, Fly.io
+
+## What Was Removed and Why
+
+### Removed Components
+1. **Kubernetes** → Overkill for MVP, Docker Compose sufficient
+2. **Microservices** → Converted to modular monolith for simplicity
+3. **API Gateway (Nginx)** → Express/Fastify handles routing, can add later
+4. **MongoDB** → PostgreSQL handles all data, JSONB for flexible schemas
+5. **RabbitMQ** → Optional Redis + Bull/BullMQ, or Node.js worker threads
+6. **WebSocket real-time updates** → Polling sufficient for MVP
+7. **Read replicas** → Single DB instance, can add later
+8. **Distributed caching** → Optional Redis, or in-memory cache
+9. **Auto-scaling** → Manual scaling sufficient for MVP
+10. **Firebase Analytics** → Can add later, focus on core features
+
+### Why These Changes
+- **Faster development**: Single codebase, fewer moving parts
+- **Lower costs**: Single server deployment
+- **Easier debugging**: All code in one place
+- **Simpler deployment**: Docker Compose vs Kubernetes
+- **Maintainable**: Small team can manage monolith
+
+## Phase 2: Scaling Plan
+
+### When to Scale (Indicators)
+- 1000+ concurrent users
+- 10,000+ bills processed per day
+- API response times > 500ms
+- Database queries > 1s
+- Worker queue backlog > 1 hour
+
+### Scaling Path
+
+**Step 1: Vertical Scaling**
+- Upgrade server CPU/RAM
+- Add database indexes
+- Enable Redis caching
+- Optimize slow queries
+
+**Step 2: Horizontal Scaling (Stateless API)**
+- Deploy multiple backend instances
+- Add load balancer (Nginx)
+- Use Redis for shared cache
+- Ensure JWT-based stateless auth
+
+**Step 3: Database Scaling**
+- Add read replicas for analytics queries
+- Partition large tables by user_id or date
+- Consider TimescaleDB for time-series data
+
+**Step 4: Microservices Extraction**
+- Extract AI module → Separate AI service
+- Extract Analytics module → Separate Analytics service
+- Keep Auth, Bills, Ledger in monolith
+
+**Step 5: Advanced Infrastructure**
+- Kubernetes for orchestration
+- Message queue (RabbitMQ/SQS) for reliability
+- CDN for bill images
+- Monitoring (Prometheus, Grafana)
+
+### Future Enhancements
+- Real-time WebSocket updates
+- On-device ML inference (TensorFlow Lite)
+- Multi-region deployment
+- Advanced caching strategies
+- Event-driven architecture

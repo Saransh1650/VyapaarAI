@@ -238,7 +238,7 @@ The Retail Analytics AI System is an intelligent platform designed to digitize a
 4. WHERE multi-store mode is enabled, THE AI_Insights_Service SHALL generate store-specific recommendations based on local patterns
 5. WHERE multi-store mode is enabled, THE System SHALL support aggregated views showing chain-wide metrics and trends
 
-### Requirement 19: Regional AI Models
+### Requirement 20: Regional AI Models
 
 **User Story:** As a system architect, I want support for region-specific AI models, so that recommendations account for local market conditions and cultural factors.
 
