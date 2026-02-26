@@ -10,7 +10,7 @@ class AppConstants {
   static const String routeOnboardingDetails = '/onboarding/details';
   static const String routeOnboardingDone = '/onboarding/done';
   static const String routeDashboard = '/dashboard';
-  static const String routeBillScanner = '/bills/scan';
-  static const String routeBillManual = '/bills/manual';
-  static const String routeInsights = '/insights';
+  static const String routeBillScanner = '/dashboard/bills/scan';
+  static const String routeBillManual = '/dashboard/bills/manual';
+  static const String routeInsights = '/dashboard/insights';
 }

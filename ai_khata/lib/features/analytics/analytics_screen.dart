@@ -44,69 +44,116 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     }
   }
 
+  static const _periods = [
+    (days: 7, label: '1 Week'),
+    (days: 30, label: '1 Month'),
+    (days: 90, label: '3 Months'),
+  ];
+
+  double get _totalRevenue => _trends.fold<double>(
+    0,
+    (sum, d) => sum + (double.tryParse(d['total'].toString()) ?? 0),
+  );
+
   @override
   Widget build(BuildContext context) => _loading
       ? const Center(child: CircularProgressIndicator())
       : RefreshIndicator(
+          color: AppTheme.primary,
           onRefresh: _load,
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Period selector
                 Row(
-                  children: [
-                    Text(
-                      'Period:',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(width: 12),
-                    for (final d in [7, 30, 90])
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: GestureDetector(
-                          onTap: () {
-                            setState(() => _days = d);
-                            _load();
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _days == d
-                                  ? AppTheme.primary
-                                  : AppTheme.card,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              '${d}d',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: _days == d
-                                    ? Colors.white
-                                    : AppTheme.textSecondary,
-                              ),
+                  children: _periods.map((p) {
+                    final selected = _days == p.days;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: GestureDetector(
+                        onTap: () {
+                          setState(() => _days = p.days);
+                          Future.microtask(_load);
+                        },
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 9,
+                          ),
+                          decoration: BoxDecoration(
+                            color: selected ? AppTheme.primary : AppTheme.card,
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: Text(
+                            p.label,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: selected
+                                  ? Colors.white
+                                  : AppTheme.textSecondary,
                             ),
                           ),
                         ),
                       ),
-                  ],
+                    );
+                  }).toList(),
                 ),
+                const SizedBox(height: 16),
+
+                // Revenue summary card
+                if (!_loading)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: AppTheme.card,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Total Sales',
+                          style: TextStyle(
+                            color: AppTheme.textSecondary,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '₹${_totalRevenue.toStringAsFixed(0)}',
+                          style: const TextStyle(
+                            color: AppTheme.textPrimary,
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'across ${_trends.length} days',
+                          style: const TextStyle(
+                            color: AppTheme.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 20),
 
-                // Sales Trend Line Chart
+                // Sales trend
                 Text(
-                  'Sales Trend',
+                  'Sales Over Time',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 12),
                 Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
                   height: 200,
                   decoration: BoxDecoration(
                     color: AppTheme.card,
@@ -115,7 +162,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   child: _trends.isEmpty
                       ? const Center(
                           child: Text(
-                            'No data',
+                            'No data yet — add some bills!',
                             style: TextStyle(color: AppTheme.textSecondary),
                           ),
                         )
@@ -125,16 +172,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                               show: true,
                               getDrawingHorizontalLine: (_) =>
                                   FlLine(color: Colors.white10, strokeWidth: 1),
-                              getDrawingVerticalLine: (_) =>
-                                  FlLine(color: Colors.white10, strokeWidth: 1),
+                              drawVerticalLine: false,
                             ),
                             titlesData: FlTitlesData(
                               leftTitles: AxisTitles(
                                 sideTitles: SideTitles(
                                   showTitles: true,
-                                  reservedSize: 40,
+                                  reservedSize: 44,
                                   getTitlesWidget: (v, _) => Text(
-                                    '₹${v.toInt()}',
+                                    '₹${(v / 1000).toStringAsFixed(0)}k',
                                     style: const TextStyle(
                                       color: AppTheme.textSecondary,
                                       fontSize: 9,
@@ -151,12 +197,13 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                     final idx = v.toInt();
                                     if (idx < 0 || idx >= _trends.length)
                                       return const SizedBox();
+                                    final raw =
+                                        _trends[idx]['day']?.toString() ?? '';
+                                    final label = raw.length >= 10
+                                        ? raw.substring(5, 10)
+                                        : '';
                                     return Text(
-                                      _trends[idx]['day']?.toString().substring(
-                                            5,
-                                            10,
-                                          ) ??
-                                          '',
+                                      label,
                                       style: const TextStyle(
                                         color: AppTheme.textSecondary,
                                         fontSize: 9,
@@ -194,7 +241,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                 dotData: const FlDotData(show: false),
                                 belowBarData: BarAreaData(
                                   show: true,
-                                  color: AppTheme.primary.withOpacity(0.1),
+                                  color: AppTheme.primary.withOpacity(0.08),
                                 ),
                               ),
                             ],
@@ -203,114 +250,106 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 ),
                 const SizedBox(height: 24),
 
-                // Product Rankings Bar Chart
+                // Top products
                 Text(
-                  'Top Products',
+                  'Best Selling Products',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  height: 260,
-                  decoration: BoxDecoration(
-                    color: AppTheme.card,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: _rankings.isEmpty
-                      ? const Center(
-                          child: Text(
-                            'No data',
-                            style: TextStyle(color: AppTheme.textSecondary),
-                          ),
-                        )
-                      : BarChart(
-                          BarChartData(
-                            alignment: BarChartAlignment.spaceAround,
-                            gridData: FlGridData(
-                              show: true,
-                              getDrawingHorizontalLine: (_) =>
-                                  FlLine(color: Colors.white10, strokeWidth: 1),
-                              drawVerticalLine: false,
+                if (_rankings.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: AppTheme.card,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'No product data yet',
+                        style: TextStyle(color: AppTheme.textSecondary),
+                      ),
+                    ),
+                  )
+                else
+                  ..._rankings.asMap().entries.map((e) {
+                    final rank = e.key + 1;
+                    final item = e.value;
+                    final revenue =
+                        double.tryParse(item['revenue'].toString()) ?? 0;
+                    final maxRevenue =
+                        double.tryParse(_rankings[0]['revenue'].toString()) ??
+                        1;
+                    final pct = revenue / maxRevenue;
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppTheme.card,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: rank == 1
+                                  ? AppTheme.warning.withOpacity(0.2)
+                                  : AppTheme.surface,
+                              shape: BoxShape.circle,
                             ),
-                            titlesData: FlTitlesData(
-                              leftTitles: AxisTitles(
-                                sideTitles: SideTitles(
-                                  showTitles: true,
-                                  reservedSize: 40,
-                                  getTitlesWidget: (v, _) => Text(
-                                    '₹${v.toInt()}',
-                                    style: const TextStyle(
-                                      color: AppTheme.textSecondary,
-                                      fontSize: 9,
-                                    ),
-                                  ),
+                            child: Center(
+                              child: Text(
+                                '#$rank',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: rank == 1
+                                      ? AppTheme.warning
+                                      : AppTheme.textSecondary,
                                 ),
                               ),
-                              bottomTitles: AxisTitles(
-                                sideTitles: SideTitles(
-                                  showTitles: true,
-                                  reservedSize: 36,
-                                  getTitlesWidget: (v, _) {
-                                    final idx = v.toInt();
-                                    if (idx < 0 || idx >= _rankings.length)
-                                      return const SizedBox();
-                                    final name =
-                                        _rankings[idx]['product_name']
-                                            ?.toString() ??
-                                        '';
-                                    return Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Text(
-                                        name.length > 6
-                                            ? '${name.substring(0, 6)}..'
-                                            : name,
-                                        style: const TextStyle(
-                                          color: AppTheme.textSecondary,
-                                          fontSize: 9,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                              rightTitles: const AxisTitles(
-                                sideTitles: SideTitles(showTitles: false),
-                              ),
-                              topTitles: const AxisTitles(
-                                sideTitles: SideTitles(showTitles: false),
-                              ),
                             ),
-                            borderData: FlBorderData(show: false),
-                            barGroups: _rankings
-                                .asMap()
-                                .entries
-                                .map(
-                                  (e) => BarChartGroupData(
-                                    x: e.key,
-                                    barRods: [
-                                      BarChartRodData(
-                                        toY:
-                                            double.tryParse(
-                                              e.value['revenue'].toString(),
-                                            ) ??
-                                            0,
-                                        color: AppTheme.primary,
-                                        width: 18,
-                                        borderRadius: BorderRadius.circular(4),
-                                        backDrawRodData:
-                                            BackgroundBarChartRodData(
-                                              show: true,
-                                              toY: 0,
-                                              color: Colors.transparent,
-                                            ),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                                .toList(),
                           ),
-                        ),
-                ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item['product_name'] ?? '',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: LinearProgressIndicator(
+                                    value: pct,
+                                    backgroundColor: AppTheme.surface,
+                                    color: AppTheme.primary,
+                                    minHeight: 5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            '₹${revenue.toStringAsFixed(0)}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.success,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
               ],
             ),
           ),

@@ -17,6 +17,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passCtrl = TextEditingController();
   bool _isLogin = true;
   bool _loading = false;
+  bool _obscurePass = true;
   String? _error;
 
   @override
@@ -44,24 +45,23 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       } else {
         await auth.register(_nameCtrl.text.trim(), _passCtrl.text);
+        if (!mounted) return;
         setState(() {
           _isLogin = true;
           _error = null;
         });
-        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Account created! Please log in.')),
         );
       }
     } catch (e) {
       setState(() {
-        _error = e.toString().replaceAll(RegExp(r'DioException.*?: '), '');
+        _error = _isLogin
+            ? 'Wrong username or password. Please try again.'
+            : 'Could not create account. Username may already exist.';
       });
     } finally {
-      if (mounted)
-        setState(() {
-          _loading = false;
-        });
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -69,108 +69,158 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Logo / title
-                  const Icon(
-                    Icons.receipt_long,
-                    color: AppTheme.primary,
-                    size: 56,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'AI Khata',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineLarge,
-                  ),
-                  Text(
-                    'Retail Analytics Platform',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 40),
-                  // Toggle
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _TabBtn(
-                          'Login',
-                          _isLogin,
-                          () => setState(() => _isLogin = true),
-                        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 48),
+              // App logo area
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: AppTheme.primarySurface,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: const Icon(
+                  Icons.storefront_rounded,
+                  color: AppTheme.primary,
+                  size: 44,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'VyapaarAI',
+                style: Theme.of(context).textTheme.headlineLarge,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Your smart shop companion',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 48),
+
+              // Toggle Login / Register
+              Container(
+                decoration: BoxDecoration(
+                  color: AppTheme.surface,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.all(4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _ToggleBtn(
+                        'Log In',
+                        _isLogin,
+                        () => setState(() => _isLogin = true),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _TabBtn(
-                          'Register',
-                          !_isLogin,
-                          () => setState(() => _isLogin = false),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  // Name field
-                  TextFormField(
-                    controller: _nameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Username',
-                      prefixIcon: Icon(Icons.person_outline),
                     ),
-                    validator: (v) => (v == null || v.trim().isEmpty)
-                        ? 'Enter your username'
-                        : null,
-                  ),
-                  const SizedBox(height: 16),
-                  // Password field
-                  TextFormField(
-                    controller: _passCtrl,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Password',
-                      prefixIcon: Icon(Icons.lock_outline),
-                    ),
-                    validator: (v) =>
-                        (v == null || v.length < 4) ? 'Min 4 characters' : null,
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppTheme.error.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        _error!,
-                        style: const TextStyle(color: AppTheme.error),
+                    Expanded(
+                      child: _ToggleBtn(
+                        'New Account',
+                        !_isLogin,
+                        () => setState(() => _isLogin = false),
                       ),
                     ),
                   ],
-                  const SizedBox(height: 24),
-                  ElevatedButton(
-                    onPressed: _loading ? null : _submit,
-                    child: _loading
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : Text(_isLogin ? 'Login' : 'Create Account'),
-                  ),
-                ],
+                ),
               ),
-            ),
+              const SizedBox(height: 28),
+
+              Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextFormField(
+                      controller: _nameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Your Name',
+                        hintText: 'e.g. Ramesh',
+                        prefixIcon: Icon(Icons.person_outline_rounded),
+                      ),
+                      textInputAction: TextInputAction.next,
+                      validator: (v) => (v == null || v.trim().isEmpty)
+                          ? 'Please enter your name'
+                          : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _passCtrl,
+                      obscureText: _obscurePass,
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        prefixIcon: const Icon(Icons.lock_outline_rounded),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _obscurePass
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
+                          onPressed: () =>
+                              setState(() => _obscurePass = !_obscurePass),
+                        ),
+                      ),
+                      textInputAction: TextInputAction.done,
+                      onFieldSubmitted: (_) => _loading ? null : _submit(),
+                      validator: (v) => (v == null || v.length < 4)
+                          ? 'At least 4 characters'
+                          : null,
+                    ),
+
+                    if (_error != null) ...[
+                      const SizedBox(height: 14),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: AppTheme.error.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: AppTheme.error.withOpacity(0.3),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline_rounded,
+                              color: AppTheme.error,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                _error!,
+                                style: const TextStyle(
+                                  color: AppTheme.error,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 24),
+                    ElevatedButton(
+                      onPressed: _loading ? null : _submit,
+                      child: _loading
+                          ? const SizedBox(
+                              height: 22,
+                              width: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Text(_isLogin ? 'Log In' : 'Create Account'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -178,26 +228,28 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-class _TabBtn extends StatelessWidget {
+class _ToggleBtn extends StatelessWidget {
   final String label;
   final bool active;
   final VoidCallback onTap;
-  const _TabBtn(this.label, this.active, this.onTap);
+  const _ToggleBtn(this.label, this.active, this.onTap);
 
   @override
   Widget build(BuildContext context) => GestureDetector(
     onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 10),
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      padding: const EdgeInsets.symmetric(vertical: 12),
       decoration: BoxDecoration(
-        color: active ? AppTheme.primary : AppTheme.surface,
-        borderRadius: BorderRadius.circular(8),
+        color: active ? AppTheme.primary : Colors.transparent,
+        borderRadius: BorderRadius.circular(9),
       ),
       child: Text(
         label,
         textAlign: TextAlign.center,
         style: TextStyle(
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w700,
+          fontSize: 14,
           color: active ? Colors.white : AppTheme.textSecondary,
         ),
       ),

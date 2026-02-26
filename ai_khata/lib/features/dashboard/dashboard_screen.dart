@@ -5,7 +5,9 @@ import '../../core/api_client.dart';
 import '../../core/theme.dart';
 import '../../core/constants.dart';
 import '../auth/auth_service.dart';
+import '../stocks/stock_screen.dart';
 
+// 4 Tabs: Home | Bills | Records | AI Tips
 class DashboardScreen extends StatefulWidget {
   final Widget child;
   const DashboardScreen({super.key, required this.child});
@@ -16,6 +18,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   int _currentIndex = 0;
   Map<String, dynamic>? _stats;
+  bool _statsLoading = true;
 
   @override
   void initState() {
@@ -24,6 +27,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadStats() async {
+    setState(() => _statsLoading = true);
     try {
       final dio = ApiClient.instance.dio;
       final trendsRes = await dio.get('/analytics/sales-trends?days=30');
@@ -35,114 +39,194 @@ class _DashboardScreenState extends State<DashboardScreen> {
         0,
         (sum, d) => sum + (double.tryParse(d['total'].toString()) ?? 0),
       );
+
+      // Today's total
+      final today = DateTime.now();
+      final todayStr =
+          '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+      final todayData = trends
+          .where((d) => d['day']?.toString().startsWith(todayStr) == true)
+          .toList();
+      final todayTotal = todayData.fold<double>(
+        0,
+        (sum, d) => sum + (double.tryParse(d['total'].toString()) ?? 0),
+      );
+
       final topProduct = rankRes.data['data'].isNotEmpty
           ? rankRes.data['data'][0]['product_name']
-          : 'N/A';
-      if (mounted)
+          : '—';
+      if (mounted) {
         setState(
           () => _stats = {
-            'total': total,
+            'monthly': total,
+            'today': todayTotal,
             'topProduct': topProduct,
             'txCount': trends.length,
           },
         );
-    } catch (_) {}
+      }
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _statsLoading = false);
+    }
   }
 
   static const _tabs = [
-    ('Dashboard', Icons.dashboard_outlined),
-    ('Bills', Icons.receipt_outlined),
-    ('Ledger', Icons.book_outlined),
-    ('Analytics', Icons.bar_chart),
-    ('Insights', Icons.lightbulb_outlined),
+    (
+      label: 'Home',
+      icon: Icons.home_rounded,
+      outlinedIcon: Icons.home_outlined,
+    ),
+    (
+      label: 'Bills',
+      icon: Icons.receipt_rounded,
+      outlinedIcon: Icons.receipt_outlined,
+    ),
+    (
+      label: 'Records',
+      icon: Icons.book_rounded,
+      outlinedIcon: Icons.book_outlined,
+    ),
+    (
+      label: 'Stock',
+      icon: Icons.inventory_2_rounded,
+      outlinedIcon: Icons.inventory_2_outlined,
+    ),
+    (
+      label: 'AI Tips',
+      icon: Icons.lightbulb_rounded,
+      outlinedIcon: Icons.lightbulb_outline,
+    ),
   ];
 
   static const _routes = [
     '/dashboard',
     '/dashboard/bills',
-    '/dashboard/ledger',
-    '/dashboard/analytics',
+    '/dashboard/records',
+    '/dashboard/stocks',
     '/dashboard/insights',
   ];
+
+  String get _storeName {
+    final auth = context.read<AuthService>();
+    return auth.userName ?? 'My Shop';
+  }
 
   Widget _buildHomeContent() {
     final auth = context.read<AuthService>();
     return RefreshIndicator(
+      color: AppTheme.primary,
       onRefresh: _loadStats,
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            const SizedBox(height: 8),
+
+            // Greeting header
             Text(
-              'Welcome back,',
-              style: Theme.of(context).textTheme.bodyMedium,
+              'Hello, ${auth.userName ?? 'there'} 👋',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium!.copyWith(color: AppTheme.textSecondary),
             ),
-            Text(
-              auth.userName ?? 'User',
-              style: Theme.of(context).textTheme.headlineMedium,
+            const SizedBox(height: 4),
+            Text(_storeName, style: Theme.of(context).textTheme.headlineMedium),
+            const SizedBox(height: 24),
+
+            // Today's sales — big card
+            _TodaySalesCard(
+              loading: _statsLoading,
+              todayTotal: _stats?['today'] as double? ?? 0,
+              monthlyTotal: _stats?['monthly'] as double? ?? 0,
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
+
+            // Quick stats row
             Row(
               children: [
                 Expanded(
-                  child: _StatCard(
-                    'Total Sales (30d)',
-                    _stats == null
+                  child: _MiniStatCard(
+                    label: 'Best Seller',
+                    value: _statsLoading
                         ? '...'
-                        : '₹${(_stats!['total'] as double).toStringAsFixed(0)}',
-                    Icons.trending_up,
-                    AppTheme.primary,
+                        : (_stats?['topProduct'] as String? ?? '—'),
+                    icon: Icons.star_rounded,
+                    color: AppTheme.warning,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: _StatCard(
-                    'Top Product',
-                    _stats == null ? '...' : (_stats!['topProduct'] as String),
-                    Icons.star_outline,
-                    AppTheme.warning,
+                  child: _MiniStatCard(
+                    label: 'Days Tracked',
+                    value: _statsLoading
+                        ? '...'
+                        : (_stats?['txCount'] ?? 0).toString(),
+                    icon: Icons.calendar_today_rounded,
+                    color: AppTheme.primary,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            _StatCard(
-              'Transactions (30d)',
-              _stats == null ? '...' : _stats!['txCount'].toString(),
-              Icons.receipt_long_outlined,
-              AppTheme.success,
-            ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 28),
+
+            // Quick Actions
             Text(
               'Quick Actions',
-              style: Theme.of(context).textTheme.titleMedium,
+              style: Theme.of(context).textTheme.titleLarge,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             Row(
               children: [
                 Expanded(
-                  child: _QuickAction(
-                    'Scan Bill',
-                    Icons.camera_alt_outlined,
-                    () => context.go('/dashboard/bills'),
+                  child: _BigActionButton(
+                    label: 'Scan a Bill',
+                    sublabel: 'Take photo',
+                    icon: Icons.camera_alt_rounded,
+                    color: AppTheme.primary,
+                    onTap: () => context.go(AppConstants.routeBillScanner),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 14),
                 Expanded(
-                  child: _QuickAction(
-                    'Add Manual',
-                    Icons.edit_outlined,
-                    () => context.go(AppConstants.routeBillManual),
+                  child: _BigActionButton(
+                    label: 'Add Bill',
+                    sublabel: 'Type manually',
+                    icon: Icons.edit_rounded,
+                    color: AppTheme.primaryLight,
+                    onTap: () => context.go(AppConstants.routeBillManual),
                   ),
                 ),
-                const SizedBox(width: 12),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
                 Expanded(
-                  child: _QuickAction(
-                    'Insights',
-                    Icons.lightbulb_outline,
-                    () => context.go('/dashboard/insights'),
+                  child: _BigActionButton(
+                    label: 'Sales Report',
+                    sublabel: 'View charts',
+                    icon: Icons.bar_chart_rounded,
+                    color: AppTheme.success,
+                    onTap: () {
+                      setState(() => _currentIndex = 3);
+                      context.go(_routes[3]);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: _BigActionButton(
+                    label: 'Records',
+                    sublabel: 'All transactions',
+                    icon: Icons.book_rounded,
+                    color: AppTheme.warning,
+                    onTap: () {
+                      setState(() => _currentIndex = 2);
+                      context.go(_routes[2]);
+                    },
                   ),
                 ),
               ],
@@ -153,116 +237,345 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Widget _buildBody() {
+    if (_currentIndex == 0) return _buildHomeContent();
+    if (_currentIndex == 3) return const StockScreen();
+    return widget.child;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_tabs[_currentIndex].$1),
+        title: Text(_tabs[_currentIndex].label),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout, size: 20),
+            icon: const Icon(Icons.logout_rounded, size: 22),
+            tooltip: 'Log out',
             onPressed: () async {
-              await context.read<AuthService>().logout();
-              if (mounted) context.go(AppConstants.routeLogin);
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  backgroundColor: AppTheme.card,
+                  title: const Text('Log out?'),
+                  content: const Text(
+                    'You will be returned to the login screen.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text(
+                        'Log out',
+                        style: TextStyle(color: AppTheme.error),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true && mounted) {
+                await context.read<AuthService>().logout();
+                if (mounted) context.go(AppConstants.routeLogin);
+              }
             },
           ),
         ],
       ),
-      body: _currentIndex == 0 ? _buildHomeContent() : widget.child,
+      body: _buildBody(),
       bottomNavigationBar: NavigationBar(
-        backgroundColor: AppTheme.surface,
         selectedIndex: _currentIndex,
         onDestinationSelected: (i) {
+          if (_currentIndex == i) return;
           setState(() => _currentIndex = i);
           context.go(_routes[i]);
         },
         destinations: _tabs
-            .map((t) => NavigationDestination(icon: Icon(t.$2), label: t.$1))
+            .map(
+              (t) => NavigationDestination(
+                icon: Icon(t.outlinedIcon),
+                selectedIcon: Icon(t.icon),
+                label: t.label,
+              ),
+            )
             .toList(),
+      ),
+      // Floating Add Bill button (visible on home)
+      floatingActionButton: _currentIndex == 0
+          ? FloatingActionButton.extended(
+              onPressed: () => _showAddOptions(context),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text(
+                'Add Bill',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            )
+          : _currentIndex == 3
+          ? null // Stock screen has its own FAB
+          : null,
+    );
+  }
+
+  void _showAddOptions(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppTheme.textHint,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                'How would you like to add a bill?',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _BottomSheetOption(
+              icon: Icons.camera_alt_rounded,
+              iconBg: AppTheme.primarySurface,
+              iconColor: AppTheme.primary,
+              title: 'Scan a Bill',
+              subtitle: 'Take a photo — we read it for you',
+              onTap: () {
+                Navigator.pop(context);
+                context.go(AppConstants.routeBillScanner);
+              },
+            ),
+            _BottomSheetOption(
+              icon: Icons.edit_rounded,
+              iconBg: AppTheme.success.withOpacity(0.12),
+              iconColor: AppTheme.success,
+              title: 'Type it in',
+              subtitle: 'Enter bill details manually',
+              onTap: () {
+                Navigator.pop(context);
+                context.go(AppConstants.routeBillManual);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _StatCard extends StatelessWidget {
-  final String title, value;
+// ── Today's Sales Card ─────────────────────────────────────────────────────────
+
+class _TodaySalesCard extends StatelessWidget {
+  final bool loading;
+  final double todayTotal;
+  final double monthlyTotal;
+  const _TodaySalesCard({
+    required this.loading,
+    required this.todayTotal,
+    required this.monthlyTotal,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        colors: [AppTheme.primary, AppTheme.primaryLight],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: loading
+        ? const Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: CircularProgressIndicator(color: Colors.white),
+            ),
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Today's Sales",
+                style: TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '₹${todayTotal.toStringAsFixed(0)}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 36,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(height: 1, color: Colors.white24),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.calendar_month_rounded,
+                    color: Colors.white70,
+                    size: 14,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'This month: ₹${monthlyTotal.toStringAsFixed(0)}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ],
+              ),
+            ],
+          ),
+  );
+}
+
+// ── Mini Stat Card ─────────────────────────────────────────────────────────────
+
+class _MiniStatCard extends StatelessWidget {
+  final String label, value;
   final IconData icon;
   final Color color;
-  const _StatCard(this.title, this.value, this.icon, this.color);
+  const _MiniStatCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(16),
-    margin: const EdgeInsets.only(bottom: 12),
     decoration: BoxDecoration(
       color: AppTheme.card,
       borderRadius: BorderRadius.circular(16),
     ),
-    child: Row(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.15),
+            color: color.withOpacity(0.14),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: Icon(icon, color: color, size: 22),
+          child: Icon(icon, color: color, size: 18),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
+        const SizedBox(height: 10),
+        Text(
+          label,
+          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
           ),
+          overflow: TextOverflow.ellipsis,
         ),
       ],
     ),
   );
 }
 
-class _QuickAction extends StatelessWidget {
-  final String label;
+// ── Big Action Button ──────────────────────────────────────────────────────────
+
+class _BigActionButton extends StatelessWidget {
+  final String label, sublabel;
   final IconData icon;
+  final Color color;
   final VoidCallback onTap;
-  const _QuickAction(this.label, this.icon, this.onTap);
+  const _BigActionButton({
+    required this.label,
+    required this.sublabel,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) => GestureDetector(
     onTap: onTap,
     child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppTheme.card,
-        borderRadius: BorderRadius.circular(12),
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.2)),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: AppTheme.primary, size: 24),
-          const SizedBox(height: 6),
+          Icon(icon, color: color, size: 28),
+          const SizedBox(height: 10),
           Text(
             label,
-            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+            ),
+          ),
+          Text(
+            sublabel,
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
           ),
         ],
       ),
     ),
+  );
+}
+
+// ── Bottom Sheet Option ────────────────────────────────────────────────────────
+
+class _BottomSheetOption extends StatelessWidget {
+  final IconData icon;
+  final Color iconBg, iconColor;
+  final String title, subtitle;
+  final VoidCallback onTap;
+  const _BottomSheetOption({
+    required this.icon,
+    required this.iconBg,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+    leading: Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: iconBg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Icon(icon, color: iconColor),
+    ),
+    title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+    subtitle: Text(
+      subtitle,
+      style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+    ),
+    onTap: onTap,
   );
 }

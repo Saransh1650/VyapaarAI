@@ -12,6 +12,7 @@ import 'features/bills/bills_screens.dart';
 import 'features/ledger/ledger_screen.dart';
 import 'features/analytics/analytics_screen.dart';
 import 'features/insights/insights_screen.dart';
+import 'features/stocks/stock_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,7 +29,7 @@ class AiKhataApp extends StatelessWidget {
       create: (_) => AuthService()..loadFromPrefs(),
       child: Consumer<AuthService>(
         builder: (_, auth, __) => MaterialApp.router(
-          title: 'AI Khata',
+          title: 'VyapaarAI',
           theme: AppTheme.dark,
           debugShowCheckedModeBanner: false,
           routerConfig: _buildRouter(auth),
@@ -75,39 +76,56 @@ GoRouter _buildRouter(AuthService auth) => GoRouter(
       builder: (_, __) => const OnboardingDoneScreen(),
     ),
 
-    // Standalone screens (outside shell)
-    GoRoute(
-      path: AppConstants.routeBillScanner,
-      builder: (_, __) => const BillScannerScreen(),
-    ),
-    GoRoute(
-      path: AppConstants.routeBillManual,
-      builder: (_, __) => const BillManualEntryScreen(),
-    ),
-
-    // Dashboard shell with nested tabs
+    // Dashboard shell — all tabs + scanner/manual INSIDE shell so nav bar stays visible
     ShellRoute(
       builder: (_, __, child) => DashboardScreen(child: child),
       routes: [
+        // Home tab (index 0) — rendered inside DashboardScreen._buildHomeContent()
         GoRoute(
           path: AppConstants.routeDashboard,
-          builder: (_, __) => const SizedBox(),
+          builder: (_, __) => const SizedBox.shrink(),
         ),
+
+        // Bills tab (index 1)
         GoRoute(
           path: '/dashboard/bills',
           builder: (_, __) => const BillsScreen(),
         ),
+
+        // Records tab (index 2)
         GoRoute(
-          path: '/dashboard/ledger',
+          path: '/dashboard/records',
           builder: (_, __) => const LedgerScreen(),
         ),
+
+        // Stock tab (index 3)
+        GoRoute(
+          path: '/dashboard/stocks',
+          builder: (_, __) => const StockScreen(),
+        ),
+
+        // AI Tips tab (index 4)
+        GoRoute(
+          path: '/dashboard/insights',
+          builder: (_, __) => const InsightsScreen(),
+        ),
+
+        // Analytics — still accessible (used by dashboard shortcuts)
         GoRoute(
           path: '/dashboard/analytics',
           builder: (_, __) => const AnalyticsScreen(),
         ),
+
+        // Scanner — inside shell so nav bar stays
         GoRoute(
-          path: '/dashboard/insights',
-          builder: (_, __) => const InsightsScreen(),
+          path: AppConstants.routeBillScanner,
+          builder: (_, __) => const BillScannerScreen(),
+        ),
+
+        // Manual entry — inside shell so nav bar stays
+        GoRoute(
+          path: AppConstants.routeBillManual,
+          builder: (_, __) => const BillManualEntryScreen(),
         ),
       ],
     ),

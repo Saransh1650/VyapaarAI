@@ -47,6 +47,16 @@ class AuthService extends ChangeNotifier {
     await prefs.setString('user_name', data['user']['name']);
     _token = data['token'];
     _userName = data['user']['name'];
+    // Restore store from login response (if user already completed onboarding)
+    if (data['store'] != null) {
+      final storeData = data['store'] as Map<String, dynamic>;
+      await prefs.setString('store_id', storeData['id'] as String);
+      await prefs.setString('store_type', storeData['type'] as String);
+      _storeId = storeData['id'] as String;
+      _storeType = storeData['type'] as String;
+      _onboardingComplete = true;
+      await prefs.setBool('onboarding_complete', true);
+    }
     notifyListeners();
   }
 
