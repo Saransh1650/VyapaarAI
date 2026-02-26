@@ -45,10 +45,10 @@ AI-powered retail analytics platform with Flutter mobile app for bill scanning, 
 ```
 ┌─────────────────────────────────┐
 │      Flutter Mobile App         │
-│  ┌──────────┐  ┌──────────┐    │
-│  │ Camera   │  │ Charts   │    │
-│  │ Scanner  │  │ (fl_chart)│   │
-│  └──────────┘  └──────────┘    │
+│  ┌──────────┐  ┌──────────┐     │
+│  │ Camera   │  │ Charts   │     │
+│  │ Scanner  │  │ (fl_chart)│    │
+│  └──────────┘  └──────────┘     │
 └────────┬────────────────────────┘
          │ HTTPS/REST
          │
