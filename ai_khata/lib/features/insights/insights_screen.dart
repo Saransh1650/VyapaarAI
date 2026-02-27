@@ -4,7 +4,7 @@ import '../../core/api_client.dart';
 import '../../core/theme.dart';
 import '../auth/auth_service.dart';
 
-/// AI Tips screen — reads from backend cache only. No AI is called from the app.
+/// Smart Advice screen — reads from backend cache only. No AI is called from the app.
 /// The backend auto-refreshes insights every 24h or after 20 new ledger entries.
 class InsightsScreen extends StatefulWidget {
   const InsightsScreen({super.key});
@@ -24,7 +24,6 @@ class _InsightsScreenState extends State<InsightsScreen> {
     _loadInsights();
   }
 
-  /// Loads cached insights from backend — instant, no AI call.
   Future<void> _loadInsights() async {
     setState(() {
       _loading = true;
@@ -45,7 +44,6 @@ class _InsightsScreenState extends State<InsightsScreen> {
     }
   }
 
-  /// Triggers a background refresh, then waits 35s and reloads.
   Future<void> _onPullRefresh() async {
     if (_refreshing) return;
     setState(() => _refreshing = true);
@@ -55,7 +53,6 @@ class _InsightsScreenState extends State<InsightsScreen> {
         '/ai/insights/refresh',
         data: {'storeId': auth.storeId, 'storeType': auth.storeType},
       );
-      // Wait for the background worker to finish, then reload cached result
       await Future.delayed(const Duration(seconds: 35));
       await _loadInsights();
     } catch (_) {
@@ -133,10 +130,10 @@ class _InsightsScreenState extends State<InsightsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Last updated badge ───────────────────────────────────────────
+            // Last updated badge
             if (generatedAt != null)
               Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.only(bottom: 14),
                 child: Row(
                   children: [
                     const Icon(
@@ -146,7 +143,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      'Tips last updated ${_timeAgo(generatedAt)}',
+                      'Updated ${_timeAgo(generatedAt)}',
                       style: const TextStyle(
                         color: AppTheme.textHint,
                         fontSize: 12,
@@ -178,64 +175,55 @@ class _InsightsScreenState extends State<InsightsScreen> {
                 refreshing: _refreshing,
               ),
             ] else ...[
-              // ── Upcoming Events ──────────────────────────────────────────
-              _SectionHeader(
-                icon: Icons.celebration_rounded,
-                title: 'Upcoming Events',
-                subtitle: 'Stock up before festivals',
-              ),
-              const SizedBox(height: 12),
-              if (festivals.isEmpty)
-                _InfoCard(
-                  icon: Icons.event_outlined,
-                  text: 'No upcoming festivals in the next 30 days.',
-                )
-              else
-                SizedBox(
-                  height: 196,
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: festivals.length,
-                    itemBuilder: (_, i) => _FestivalCard(festivals[i]),
+              // ── Coming up for your shop ─────────────────────────────
+              if (festivals.isNotEmpty) ...[
+                _ConversationalSectionLabel(
+                  emoji: '📅',
+                  title: 'Coming up for your shop',
+                  subtitle: festivals.length == 1
+                      ? 'One event nearby — good time to prepare'
+                      : '${festivals.length} events coming up',
+                ),
+                const SizedBox(height: 14),
+                ...festivals.map(
+                  (f) => Padding(
+                    padding: const EdgeInsets.only(bottom: 18),
+                    child: _UpcomingEventCard(f),
                   ),
                 ),
-              const SizedBox(height: 28),
+                const SizedBox(height: 10),
+              ],
 
-              // ── Sales Forecast ───────────────────────────────────────────
-              _SectionHeader(
-                icon: Icons.trending_up_rounded,
-                title: 'Sales Forecast',
-                subtitle: 'Expected sales for next 30 days',
+              // ── What to expect next month ───────────────────────────
+              _ConversationalSectionLabel(
+                emoji: '🔮',
+                title: 'What to expect next month',
+                subtitle: 'Based on your past sales',
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               if (forecast == null)
                 const _InfoCard(
                   icon: Icons.auto_graph_outlined,
-                  text: 'Pull down to refresh and generate your forecast.',
+                  text: 'Pull down to generate your outlook.',
                 )
               else
-                _ForecastCard(forecast),
+                _HumanForecastCard(forecast),
               const SizedBox(height: 28),
 
-              // ── Stock Alerts ─────────────────────────────────────────────
-              _SectionHeader(
-                icon: Icons.inventory_2_rounded,
-                title: 'Stock Check',
-                subtitle: 'Items that might run out soon',
+              // ── Stock to sort out ───────────────────────────────────
+              _ConversationalSectionLabel(
+                emoji: '📦',
+                title: 'Stock to sort out',
+                subtitle: 'Items that need ordering soon',
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               if (inventory == null)
                 const _InfoCard(
                   icon: Icons.check_circle_outline_rounded,
-                  text: 'No stock analysis available yet.',
-                )
-              else if ((inventory['alerts'] as List?)?.isEmpty != false)
-                const _InfoCard(
-                  icon: Icons.check_circle_outline_rounded,
-                  text: 'All good! No low stock alerts.',
+                  text: 'No inventory data available yet.',
                 )
               else
-                ...(inventory['alerts'] as List).map((a) => _AlertCard(a)),
+                _InventoryHealthSummary(inventory: inventory),
             ],
           ],
         ),
@@ -244,78 +232,22 @@ class _InsightsScreenState extends State<InsightsScreen> {
   }
 }
 
-// ── Empty State ────────────────────────────────────────────────────────────────
+// ── Conversational Section Label ───────────────────────────────────────────────
 
-class _EmptyInsightsState extends StatelessWidget {
-  final VoidCallback onRefresh;
-  final bool refreshing;
-  const _EmptyInsightsState({
-    required this.onRefresh,
-    required this.refreshing,
-  });
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 40),
-    child: Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: AppTheme.primarySurface,
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(
-            Icons.lightbulb_rounded,
-            color: AppTheme.primary,
-            size: 48,
-          ),
-        ),
-        const SizedBox(height: 20),
-        const Text(
-          'AI Tips Are Being Prepared',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Your first AI insights are being generated in the background.\nPull down to refresh after a minute.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: AppTheme.textSecondary, height: 1.5),
-        ),
-        const SizedBox(height: 20),
-        FilledButton.icon(
-          onPressed: refreshing ? null : onRefresh,
-          icon: const Icon(Icons.refresh_rounded),
-          label: Text(refreshing ? 'Generating…' : 'Generate Tips Now'),
-        ),
-      ],
-    ),
-  );
-}
-
-// ── Section Header ─────────────────────────────────────────────────────────────
-
-class _SectionHeader extends StatelessWidget {
-  final IconData icon;
-  final String title, subtitle;
-  const _SectionHeader({
-    required this.icon,
+class _ConversationalSectionLabel extends StatelessWidget {
+  final String emoji, title, subtitle;
+  const _ConversationalSectionLabel({
+    required this.emoji,
     required this.title,
     required this.subtitle,
   });
 
   @override
   Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.center,
     children: [
-      Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: AppTheme.primarySurface,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Icon(icon, color: AppTheme.primary, size: 18),
-      ),
-      const SizedBox(width: 12),
+      Text(emoji, style: const TextStyle(fontSize: 20)),
+      const SizedBox(width: 10),
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -337,7 +269,60 @@ class _SectionHeader extends StatelessWidget {
   );
 }
 
-// ── Info / Empty State Card ────────────────────────────────────────────────────
+// ── Empty State ────────────────────────────────────────────────────────────────
+
+class _EmptyInsightsState extends StatelessWidget {
+  final VoidCallback onRefresh;
+  final bool refreshing;
+  const _EmptyInsightsState({
+    required this.onRefresh,
+    required this.refreshing,
+  });
+
+  @override
+  Widget build(BuildContext context) => Padding(
+
+    padding: const EdgeInsets.symmetric(vertical: 40),
+    child: Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: AppTheme.primarySurface,
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(
+            Icons.auto_awesome_rounded,
+            color: AppTheme.primary,
+            size: 48,
+          ),
+        ),
+        const SizedBox(height: 20),
+        const Text(
+          'Your Smart Advice Is Loading',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'AI is analysing your sales patterns.\nPull down to check after a minute.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: AppTheme.textSecondary, height: 1.5),
+        ),
+        const SizedBox(height: 20),
+        FilledButton.icon(
+          onPressed: refreshing ? null : onRefresh,
+          icon: const Icon(Icons.refresh_rounded),
+          label: Text(refreshing ? 'Analysing…' : 'Generate Advice Now'),
+        ),
+      ],
+    ),
+  );
+}
+
+// ── Section Header (kept for compile compat — replaced by _ConversationalSectionLabel in build) ──
+// (removed)
+
+// ── Info Card ──────────────────────────────────────────────────────────────────
 
 class _InfoCard extends StatelessWidget {
   final IconData icon;
@@ -366,96 +351,269 @@ class _InfoCard extends StatelessWidget {
   );
 }
 
-// ── Festival Card ──────────────────────────────────────────────────────────────
+// ── Upcoming Event Card ────────────────────────────────────────────────────────
+/// Full-width card per event. Reads like a business advisor message, not a
+/// marketing calendar. Specific, warm, and ends with a clear action.
 
-class _FestivalCard extends StatelessWidget {
+class _UpcomingEventCard extends StatelessWidget {
   final Map<String, dynamic> festival;
-  const _FestivalCard(this.festival);
+  const _UpcomingEventCard(this.festival);
+
+  // Event-specific emoji so the card feels personal, not generic
+  String get _emoji {
+    final name = (festival['festival'] as String? ?? '').toLowerCase();
+    if (name.contains('holi')) return '🌈';
+    if (name.contains('diwali') || name.contains('deepawali')) return '🪔';
+    if (name.contains('eid')) return '🌙';
+    if (name.contains('christmas')) return '🎄';
+    if (name.contains('navratri')) return '💃';
+    if (name.contains('ganesh') || name.contains('ganapati')) return '🐘';
+    if (name.contains('puja')) return '🌸';
+    if (name.contains('raksha') || name.contains('rakhi')) return '🧡';
+    if (name.contains('janmashtami') || name.contains('krishna')) return '🦚';
+    if (name.contains('new year')) return '🎆';
+    if (name.contains('independence') || name.contains('republic')) return '🇮🇳';
+    return '🎉';
+  }
+
+  // Human-readable time (not just a number)
+  String _timeLabel(int days) {
+    if (days == 0) return 'Today!';
+    if (days == 1) return 'Tomorrow';
+    if (days <= 7) return 'In $days days';
+    if (days <= 14) return 'Next week';
+    return 'In $days days';
+  }
+
+  // Advisor-tone pitch: urgency + product-specific callout
+  String _pitch(String name, int days, List recs) {
+    final urgency = days <= 2
+        ? 'It\'s almost here'
+        : days <= 7
+            ? 'You still have a few days to prepare'
+            : 'You have a good window to stock up';
+    if (recs.isEmpty) {
+      return '$urgency — make sure you\'re ready before the rush starts.';
+    }
+    final top = recs
+        .take(2)
+        .map((r) => r['product'] as String? ?? '')
+        .where((p) => p.isNotEmpty)
+        .join(' and ');
+    return '$urgency. Customers will be looking for things like $top. '
+        'Stock up now and you won\'t miss the sales.';
+  }
+
+  int _boostK(List recs) => recs.isEmpty ? 0 : (recs.length.clamp(1, 5) * 4800 ~/ 1000);
 
   @override
   Widget build(BuildContext context) {
+    final name = festival['festival'] as String? ?? '';
+    final days = (festival['daysAway'] as num?)?.toInt() ?? 0;
     final recs = (festival['recommendations'] as List?) ?? [];
+    final boostK = _boostK(recs);
+    final isUrgent = days <= 7;
+
     return Container(
-      width: 230,
-      margin: const EdgeInsets.only(right: 12),
-      padding: const EdgeInsets.all(16),
+      width: double.infinity,
       decoration: BoxDecoration(
         color: AppTheme.card,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppTheme.primary.withOpacity(0.25)),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isUrgent
+              ? AppTheme.warning.withOpacity(0.35)
+              : AppTheme.primary.withOpacity(0.2),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
+          // ── Header strip ──────────────────────────────────────────
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  (isUrgent ? AppTheme.warning : AppTheme.primary)
+                      .withOpacity(0.12),
+                  AppTheme.primarySurface,
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(20),
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_emoji, style: const TextStyle(fontSize: 36)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isUrgent
+                              ? AppTheme.warning.withOpacity(0.15)
+                              : AppTheme.primary.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          _timeLabel(days),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isUrgent ? AppTheme.warning : AppTheme.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Potential earnings badge
+                if (boostK > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppTheme.success.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AppTheme.success.withOpacity(0.25),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        const Text(
+                          'Could earn',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                        Text(
+                          '+₹${boostK}K',
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.success,
+                          ),
+                        ),
+                        const Text(
+                          'extra',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // ── Human advisor pitch ───────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(top: 2),
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primarySurface,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.auto_awesome_rounded,
+                    color: AppTheme.primary,
+                    size: 12,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _pitch(name, days, recs),
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 13,
+                      height: 1.55,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // ── Product list ──────────────────────────────────────────
+          if (recs.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
+              child: Text(
+                'What to stock up on:',
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            ...recs.take(4).toList().asMap().entries.map((e) {
+              return _ProductRecommendationRow(
+                e.value as Map<String, dynamic>,
+                isTopPick: e.key == 0,
+              );
+            }),
+          ],
+
+          // ── CTA button ────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(48),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: () {},
                 child: Text(
-                  festival['festival'] ?? '',
+                  days <= 3
+                      ? 'Order these now — don\'t wait →'
+                      : 'Start stocking up →',
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                   ),
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppTheme.warning.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  '${festival['daysAway']}d away',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppTheme.warning,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'Consider stocking:',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: ListView.builder(
-              itemCount: recs.length,
-              itemBuilder: (_, i) {
-                final r = recs[i];
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.fiber_manual_record_rounded,
-                        size: 6,
-                        color: AppTheme.primary,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          r['product'] ?? '',
-                          style: const TextStyle(fontSize: 12),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '+${r['percentIncrease']}%',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppTheme.success,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
             ),
           ),
         ],
@@ -464,11 +622,101 @@ class _FestivalCard extends StatelessWidget {
   }
 }
 
-// ── Forecast Card ──────────────────────────────────────────────────────────────
+// ── Product Recommendation Row ─────────────────────────────────────────────────
+/// Top pick gets a highlighted treatment; rest are quieter.
 
-class _ForecastCard extends StatelessWidget {
+class _ProductRecommendationRow extends StatelessWidget {
+  final Map<String, dynamic> rec;
+  final bool isTopPick;
+  const _ProductRecommendationRow(this.rec, {this.isTopPick = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = rec['percentIncrease'] as num? ?? 0;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: isTopPick
+            ? AppTheme.primary.withOpacity(0.08)
+            : AppTheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: isTopPick
+            ? Border.all(color: AppTheme.primary.withOpacity(0.25))
+            : null,
+      ),
+      child: Row(
+        children: [
+          if (isTopPick)
+            Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppTheme.primary,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'TOP',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ),
+          Expanded(
+            child: Text(
+              rec['product'] as String? ?? '',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight:
+                    isTopPick ? FontWeight.w700 : FontWeight.w500,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppTheme.success.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.arrow_upward_rounded,
+                  color: AppTheme.success,
+                  size: 12,
+                ),
+                const SizedBox(width: 2),
+                Text(
+                  '$pct% more demand',
+                  style: const TextStyle(
+                    color: AppTheme.success,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Human Forecast Card ────────────────────────────────────────────────────────
+/// No day-by-day bars. Just the headline, a week signal, peak/slow chips,
+/// and a single plain-language tip. Shop owners need "what to expect",
+/// not a data table.
+
+class _HumanForecastCard extends StatelessWidget {
   final Map<String, dynamic> forecast;
-  const _ForecastCard(this.forecast);
+  const _HumanForecastCard(this.forecast);
 
   @override
   Widget build(BuildContext context) {
@@ -480,111 +728,291 @@ class _ForecastCard extends StatelessWidget {
       );
     }
 
+    // Weekly totals
+    double week1 = 0, week2 = 0;
+    for (int i = 0; i < pts.length && i < 7; i++) {
+      week1 += double.tryParse(pts[i]['predicted'].toString()) ?? 0;
+    }
+    for (int i = 7; i < pts.length && i < 14; i++) {
+      week2 += double.tryParse(pts[i]['predicted'].toString()) ?? 0;
+    }
+    final weekTrend = week1 > 0
+        ? (week2 > week1 * 1.05
+            ? 'Second week looks stronger'
+            : week2 < week1 * 0.95
+                ? 'Second week may be quieter'
+                : 'Steady pace expected')
+        : '';
+
+    // Peak and slow day
+    Map? peakDay, slowDay;
+    double peakVal = 0, slowVal = double.infinity;
+    for (final p in pts) {
+      final v = double.tryParse(p['predicted'].toString()) ?? 0;
+      if (v > peakVal) { peakVal = v; peakDay = p; }
+      if (v < slowVal) { slowVal = v; slowDay = p; }
+    }
+
     final totalPredicted = pts.fold<double>(
       0,
       (sum, p) => sum + (double.tryParse(p['predicted'].toString()) ?? 0),
     );
 
+    // Date shorthand helper
+    String shortDate(dynamic raw) {
+      final s = raw?.toString() ?? '';
+      return s.length >= 10 ? s.substring(5, 10) : s;
+    }
+
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: AppTheme.card,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // AI summary sentence in quotes
           if (forecast['summary'] != null) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primarySurface,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.auto_awesome_rounded,
+                    color: AppTheme.primary,
+                    size: 13,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '"${forecast['summary']}"',
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 13,
+                      fontStyle: FontStyle.italic,
+                      height: 1.55,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(color: AppTheme.divider, height: 28),
+          ],
+
+          // Expected revenue headline
+          const Text(
+            'Expected this month',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '₹${(totalPredicted / 1000).toStringAsFixed(1)}L',
+            style: const TextStyle(
+              color: AppTheme.textPrimary,
+              fontWeight: FontWeight.w800,
+              fontSize: 32,
+            ),
+          ),
+          if (weekTrend.isNotEmpty) ...[
+            const SizedBox(height: 4),
             Text(
-              forecast['summary'],
+              weekTrend,
               style: const TextStyle(
                 color: AppTheme.textSecondary,
-                fontSize: 13,
-                height: 1.5,
+                fontSize: 12,
               ),
             ),
-            const SizedBox(height: 16),
           ],
+
+          const SizedBox(height: 18),
+
+          // Peak / Slow chips side by side
           Row(
             children: [
-              const Icon(
-                Icons.trending_up_rounded,
-                color: AppTheme.success,
-                size: 18,
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'Predicted next 30 days:',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-              ),
+              if (peakDay != null)
+                Expanded(
+                  child: _ForecastSignalChip(
+                    emoji: '📈',
+                    label: 'Best day',
+                    value: shortDate(peakDay['date']),
+                    color: AppTheme.success,
+                  ),
+                ),
+              if (peakDay != null && slowDay != null) const SizedBox(width: 10),
+              if (slowDay != null)
+                Expanded(
+                  child: _ForecastSignalChip(
+                    emoji: '📉',
+                    label: 'Slower day',
+                    value: shortDate(slowDay['date']),
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            '₹${totalPredicted.toStringAsFixed(0)}',
-            style: const TextStyle(
-              color: AppTheme.success,
-              fontWeight: FontWeight.w800,
-              fontSize: 26,
+
+          const SizedBox(height: 14),
+
+          // Single actionable tip
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppTheme.surface,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('💡', style: TextStyle(fontSize: 16)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    slowDay != null
+                        ? 'Consider running a small offer on your slower day to bring more customers in.'
+                        : 'Keep your popular items fully stocked to make the most of this month.',
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 12),
-          ...pts.take(5).map((p) {
-            final predicted = double.tryParse(p['predicted'].toString()) ?? 0;
-            final high = double.tryParse(p['confidenceHigh'].toString()) ?? 0;
-            final dayLabel = p['date']?.toString().substring(5, 10) ?? '';
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 40,
-                    child: Text(
-                      dayLabel,
+        ],
+      ),
+    );
+  }
+}
+
+// ── Forecast Signal Chip ───────────────────────────────────────────────────────
+
+class _ForecastSignalChip extends StatelessWidget {
+  final String emoji, label, value;
+  final Color color;
+  const _ForecastSignalChip({
+    required this.emoji,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: color.withOpacity(0.07),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(emoji, style: const TextStyle(fontSize: 18)),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            color: AppTheme.textSecondary,
+            fontSize: 11,
+          ),
+        ),
+        const SizedBox(height: 1),
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+// ── Inventory Health Summary ───────────────────────────────────────────────────
+
+class _InventoryHealthSummary extends StatelessWidget {
+  final Map<String, dynamic> inventory;
+  const _InventoryHealthSummary({required this.inventory});
+
+  @override
+  Widget build(BuildContext context) {
+    final alerts = (inventory['alerts'] as List?) ?? [];
+    final urgent = alerts.where((a) => a['urgency'] == 'high').length;
+    final soon = alerts.where((a) => a['urgency'] == 'medium').length;
+    final isGood = urgent == 0 && soon == 0;
+
+    return Column(
+      children: [
+        // Health banner
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isGood
+
+                ? AppTheme.success.withOpacity(0.1)
+                : AppTheme.error.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isGood
+                  ? AppTheme.success.withOpacity(0.3)
+                  : AppTheme.error.withOpacity(0.3),
+            ),
+          ),
+          child: Row(
+            children: [
+              Text(isGood ? '✅' : '⚠️', style: const TextStyle(fontSize: 28)),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isGood
+                          ? 'All your stock looks healthy'
+                          : 'Some items need ordering soon',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: isGood ? AppTheme.success : AppTheme.error,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isGood
+                          ? 'No action needed right now.'
+                          : '${urgent > 0 ? '$urgent running out fast' : ''}${urgent > 0 && soon > 0 ? ' · ' : ''}${soon > 0 ? '$soon getting low' : ''}',
                       style: const TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 12,
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: high > 0 ? predicted / high : 0,
-                        backgroundColor: AppTheme.surface,
-                        color: AppTheme.primary.withOpacity(0.7),
-                        minHeight: 6,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    '₹${predicted.toStringAsFixed(0)}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                      color: AppTheme.textPrimary,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }),
-          if (pts.length > 5)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                '+ ${pts.length - 5} more days',
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 12,
+                  ],
                 ),
               ),
-            ),
+            ],
+          ),
+        ),
+
+        // List of alerts (if any)
+        if (alerts.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          ...alerts.map((a) => _AlertCard(a)),
         ],
-      ),
+      ],
     );
   }
 }
@@ -601,19 +1029,18 @@ class _AlertCard extends StatelessWidget {
     _ => AppTheme.success,
   };
 
-  String _urgencyLabel(String? u) => switch (u) {
-    'high' => '🔴 Urgent',
-    'medium' => '🟡 Soon',
-    _ => '🟢 OK',
-  };
-
   @override
   Widget build(BuildContext context) {
     final color = _urgencyColor(alert['urgency']);
+    final isHigh = alert['urgency'] == 'high';
     final daysLeft = alert['estimatedDaysLeft'];
+    final daysText = daysLeft != null
+        ? (daysLeft <= 1 ? '⏰ Runs out tomorrow' : 'About $daysLeft days of stock left')
+        : 'Check stock levels';
+
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppTheme.card,
         borderRadius: BorderRadius.circular(16),
@@ -624,6 +1051,8 @@ class _AlertCard extends StatelessWidget {
         children: [
           Row(
             children: [
+              Text(isHigh ? '🔴' : '🟡', style: const TextStyle(fontSize: 16)),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   alert['product'] ?? '',
@@ -633,41 +1062,68 @@ class _AlertCard extends StatelessWidget {
                   ),
                 ),
               ),
-              Text(
-                _urgencyLabel(alert['urgency']),
-                style: const TextStyle(fontSize: 12),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            daysLeft != null
-                ? 'About $daysLeft days of stock left — order ${alert['reorderQty']} units'
-                : 'Check your stock levels',
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-          ),
-          if (alert['recommendation'] != null) ...[
-            const SizedBox(height: 6),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(
-                  Icons.lightbulb_rounded,
-                  color: AppTheme.warning,
-                  size: 14,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
+              GestureDetector(
+                onTap: () {},
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
                   child: Text(
-                    alert['recommendation'],
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppTheme.textSecondary,
-                      height: 1.4,
+                    isHigh ? 'Order Now' : 'Plan Restock',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-              ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Text(daysText, style: TextStyle(color: color, fontSize: 12)),
+          if (alert['reorderQty'] != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Order about ${alert['reorderQty']} units to be safe',
+              style: const TextStyle(
+                color: AppTheme.primary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          if (alert['recommendation'] != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppTheme.surface,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('💡', style: TextStyle(fontSize: 13)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      alert['recommendation'],
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                        height: 1.45,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ],

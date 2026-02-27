@@ -10,7 +10,6 @@ import 'features/onboarding/onboarding_screens.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/bills/bills_screens.dart';
 import 'features/ledger/ledger_screen.dart';
-import 'features/analytics/analytics_screen.dart';
 import 'features/insights/insights_screen.dart';
 import 'features/stocks/stock_screen.dart';
 
@@ -76,7 +75,7 @@ GoRouter _buildRouter(AuthService auth) => GoRouter(
       builder: (_, __) => const OnboardingDoneScreen(),
     ),
 
-    // Dashboard shell — all tabs + scanner/manual INSIDE shell so nav bar stays visible
+    // Dashboard shell — 3 tabs: Home | Smart Advice | Inventory
     ShellRoute(
       builder: (_, __, child) => DashboardScreen(child: child),
       routes: [
@@ -86,34 +85,28 @@ GoRouter _buildRouter(AuthService auth) => GoRouter(
           builder: (_, __) => const SizedBox.shrink(),
         ),
 
-        // Bills tab (index 1)
+        // Smart Advice tab (index 1)
+        GoRoute(
+          path: '/dashboard/advice',
+          builder: (_, __) => const InsightsScreen(),
+        ),
+
+        // Inventory tab (index 2)
+        GoRoute(
+          path: '/dashboard/inventory',
+          builder: (_, __) => const StockScreen(),
+        ),
+
+        // Bills — secondary screen (no nav tab, accessible from Home FAB)
         GoRoute(
           path: '/dashboard/bills',
           builder: (_, __) => const BillsScreen(),
         ),
 
-        // Records tab (index 2)
+        // Records — secondary screen (accessible from Home quick action)
         GoRoute(
           path: '/dashboard/records',
           builder: (_, __) => const LedgerScreen(),
-        ),
-
-        // Stock tab (index 3)
-        GoRoute(
-          path: '/dashboard/stocks',
-          builder: (_, __) => const StockScreen(),
-        ),
-
-        // AI Tips tab (index 4)
-        GoRoute(
-          path: '/dashboard/insights',
-          builder: (_, __) => const InsightsScreen(),
-        ),
-
-        // Analytics — still accessible (used by dashboard shortcuts)
-        GoRoute(
-          path: '/dashboard/analytics',
-          builder: (_, __) => const AnalyticsScreen(),
         ),
 
         // Scanner — inside shell so nav bar stays

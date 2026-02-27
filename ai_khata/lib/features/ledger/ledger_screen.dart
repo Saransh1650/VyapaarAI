@@ -145,11 +145,18 @@ class _LedgerScreenState extends State<LedgerScreen> {
             itemBuilder: (_, gi) {
               final dateKey = sortedKeys[gi];
               final dayEntries = grouped[dateKey]!;
-              final dayTotal = dayEntries.fold<double>(
-                0,
-                (sum, e) =>
-                    sum + (double.tryParse(e['total_amount'].toString()) ?? 0),
-              );
+              final dayTotal = dayEntries.fold<double>(0, (sum, e) {
+                final amt = double.tryParse(e['total_amount'].toString()) ?? 0;
+                final isExpense =
+                    (e['transaction_type'] ?? 'income') == 'expense';
+                return isExpense ? sum - amt : sum + amt;
+              });
+              final dayTotalColor = dayTotal >= 0
+                  ? AppTheme.success
+                  : AppTheme.error;
+              final dayTotalStr = dayTotal >= 0
+                  ? '+₹${dayTotal.toStringAsFixed(0)}'
+                  : '-₹${dayTotal.abs().toStringAsFixed(0)}';
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -167,9 +174,9 @@ class _LedgerScreenState extends State<LedgerScreen> {
                         ),
                         const Spacer(),
                         Text(
-                          '₹${dayTotal.toStringAsFixed(0)}',
-                          style: const TextStyle(
-                            color: AppTheme.primary,
+                          dayTotalStr,
+                          style: TextStyle(
+                            color: dayTotalColor,
                             fontWeight: FontWeight.w700,
                             fontSize: 13,
                           ),
@@ -227,18 +234,44 @@ class _EntryCard extends StatelessWidget {
         (entry['line_items'] as List?)?.where((li) => li != null).toList() ??
         [];
     final amount = double.tryParse(entry['total_amount'].toString()) ?? 0;
+    final isExpense = (entry['transaction_type'] ?? 'income') == 'expense';
+    final amountColor = isExpense ? AppTheme.error : AppTheme.success;
+    final amountLabel = isExpense
+        ? '-₹${amount.toStringAsFixed(0)}'
+        : '+₹${amount.toStringAsFixed(0)}';
+
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppTheme.card,
         borderRadius: BorderRadius.circular(16),
+        border: Border(
+          left: BorderSide(color: amountColor.withOpacity(0.5), width: 3),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
+              // Type badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: amountColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  isExpense ? '↑ Expense' : '↓ Income',
+                  style: TextStyle(
+                    color: amountColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   entry['merchant'] ?? 'Unknown Shop',
@@ -246,12 +279,13 @@ class _EntryCard extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                     fontSize: 15,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               Text(
-                '₹${amount.toStringAsFixed(0)}',
-                style: const TextStyle(
-                  color: AppTheme.success,
+                amountLabel,
+                style: TextStyle(
+                  color: amountColor,
                   fontWeight: FontWeight.w800,
                   fontSize: 16,
                 ),

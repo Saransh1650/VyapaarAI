@@ -11,9 +11,9 @@ class AppTheme {
   static const Color card = Color(0xFF242424);
   static const Color cardElevated = Color(0xFF2E2E2E);
 
-  static const Color success = Color(0xFF22C55E);
-  static const Color warning = Color(0xFFF59E0B);
-  static const Color error = Color(0xFFEF4444);
+  static const Color success = Color(0xFF2ECC71);
+  static const Color warning = Color(0xFFF4B400);
+  static const Color error = Color(0xFFFF5252);
 
   static const Color textPrimary = Color(0xFFF5F5F5);
   static const Color textSecondary = Color(0xFF9E9E9E);
@@ -38,6 +38,7 @@ class AppTheme {
       foregroundColor: textPrimary,
       elevation: 0,
       centerTitle: false,
+      toolbarHeight: 64,
       titleTextStyle: TextStyle(
         color: textPrimary,
         fontSize: 18,

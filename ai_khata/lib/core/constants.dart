@@ -12,5 +12,8 @@ class AppConstants {
   static const String routeDashboard = '/dashboard';
   static const String routeBillScanner = '/dashboard/bills/scan';
   static const String routeBillManual = '/dashboard/bills/manual';
-  static const String routeInsights = '/dashboard/insights';
+  static const String routeAdvice = '/dashboard/advice';
+  static const String routeInventory = '/dashboard/inventory';
+  static const String routeBills = '/dashboard/bills';
+  static const String routeRecords = '/dashboard/records';
 }

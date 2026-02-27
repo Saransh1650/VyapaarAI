@@ -541,6 +541,7 @@ class _BillManualEntryScreenState extends State<BillManualEntryScreen> {
   final _merchantCtrl = TextEditingController();
   final _totalCtrl = TextEditingController();
   DateTime _date = DateTime.now();
+  String _transactionType = 'income'; // 'income' or 'expense'
   bool _loading = false;
 
   final List<Map<String, TextEditingController>> _items = [];
@@ -590,6 +591,7 @@ class _BillManualEntryScreenState extends State<BillManualEntryScreen> {
           'merchant': _merchantCtrl.text.trim(),
           'date': _date.toIso8601String(),
           'total': double.tryParse(_totalCtrl.text) ?? 0,
+          'transactionType': _transactionType,
           'lineItems': lineItems,
         },
       );
@@ -624,6 +626,97 @@ class _BillManualEntryScreenState extends State<BillManualEntryScreen> {
       child: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          // ── Transaction Type Toggle ───────────────────────────────
+          Container(
+            decoration: BoxDecoration(
+              color: AppTheme.surface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFF333333)),
+            ),
+            padding: const EdgeInsets.all(4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _transactionType = 'income'),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _transactionType == 'income'
+                            ? AppTheme.success
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.arrow_downward_rounded,
+                            size: 16,
+                            color: _transactionType == 'income'
+                                ? Colors.white
+                                : AppTheme.textSecondary,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Income',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                              color: _transactionType == 'income'
+                                  ? Colors.white
+                                  : AppTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _transactionType = 'expense'),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _transactionType == 'expense'
+                            ? AppTheme.error
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.arrow_upward_rounded,
+                            size: 16,
+                            color: _transactionType == 'expense'
+                                ? Colors.white
+                                : AppTheme.textSecondary,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Expense',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                              color: _transactionType == 'expense'
+                                  ? Colors.white
+                                  : AppTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
           TextFormField(
             controller: _merchantCtrl,
             decoration: const InputDecoration(

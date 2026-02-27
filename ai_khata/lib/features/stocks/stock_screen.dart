@@ -69,6 +69,15 @@ class _StockScreenState extends State<StockScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final urgent = _items
+        .where((i) => (double.tryParse(i['quantity'].toString()) ?? 0) <= 0)
+        .length;
+    final low = _items.where((i) {
+      final q = double.tryParse(i['quantity'].toString()) ?? 0;
+      return q > 0 && q <= 5;
+    }).length;
+    final healthy = _items.length - urgent - low;
+
     return Scaffold(
       body: RefreshIndicator(
         color: AppTheme.primary,
@@ -87,17 +96,24 @@ class _StockScreenState extends State<StockScreen> {
               )
             : _items.isEmpty
             ? _EmptyState(onAdd: () => _showAddEditDialog())
-            : ListView.builder(
+            : ListView(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-                itemCount: _items.length,
-                itemBuilder: (_, i) {
-                  final item = _items[i] as Map<String, dynamic>;
-                  return _StockItemCard(
-                    item: item,
-                    onEdit: () => _showAddEditDialog(existing: item),
-                    onDelete: () => _confirmDelete(item['id'] as String),
-                  );
-                },
+                children: [
+                  // ── Inventory Health Card ──────────────────────────
+                  _InventoryHealthCard(
+                    urgent: urgent,
+                    low: low,
+                    healthy: healthy,
+                  ),
+                  const SizedBox(height: 16),
+                  ..._items.map(
+                    (item) => _StockItemCard(
+                      item: item,
+                      onEdit: () => _showAddEditDialog(existing: item),
+                      onDelete: () => _confirmDelete(item['id'] as String),
+                    ),
+                  ),
+                ],
               ),
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -131,6 +147,73 @@ class _StockScreenState extends State<StockScreen> {
             child: const Text(
               'Remove',
               style: TextStyle(color: AppTheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Inventory Health Card ──────────────────────────────────────────────────────
+
+class _InventoryHealthCard extends StatelessWidget {
+  final int urgent, low, healthy;
+  const _InventoryHealthCard({
+    required this.urgent,
+    required this.low,
+    required this.healthy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isGood = urgent == 0 && low == 0;
+    final color = isGood
+        ? AppTheme.success
+        : (urgent > 0 ? AppTheme.error : AppTheme.warning);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.09),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Text(
+            isGood ? '✅' : (urgent > 0 ? '🔴' : '🟡'),
+            style: const TextStyle(fontSize: 26),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isGood
+                      ? 'Inventory Health: GOOD'
+                      : 'Inventory Health: AT RISK',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  [
+                    if (urgent > 0) '$urgent out of stock',
+                    if (low > 0) '$low running low',
+                    if (healthy > 0) '$healthy healthy',
+                  ].join(' · '),
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -204,13 +287,13 @@ class _StockItemCard extends StatelessWidget {
                 if (qty <= 0) ...[
                   const SizedBox(width: 8),
                   const Text(
-                    '⚠️ Out of stock',
+                    '⛔ Out of stock',
                     style: TextStyle(color: AppTheme.error, fontSize: 12),
                   ),
                 ] else if (qty <= 5) ...[
                   const SizedBox(width: 8),
                   const Text(
-                    '🟡 Low stock',
+                    '⚠️ Runs out soon',
                     style: TextStyle(color: AppTheme.warning, fontSize: 12),
                   ),
                 ],
