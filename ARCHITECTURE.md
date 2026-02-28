@@ -1,6 +1,8 @@
 # AI Khata — Full App Architecture & Screen Reference
 
 > **What this document is:** A complete, screen-by-screen, flow-by-flow reference for the entire AI Khata app — Flutter front-end, Node.js back-end, AI system, database schema, and all the rules that hold it together. If you want to understand what happens when a user taps anything, this is the document.
+>
+> Last updated: **28 February 2026**
 
 ---
 
@@ -202,9 +204,11 @@ AI_Khata_backend/src/
 ├── ai/               ← Insights cache GET + jobs endpoints + scheduler
 ├── stocks/           ← Stock items CRUD
 ├── order_items/      ← Order list CRUD
+├── utils/
+│   └── stockSync.js        ← Shared inventory-sync logic (manual bills + OCR)
 └── workers/
-    ├── refreshInsights.js  ← AI worker (forecast + inventory + festival)
-    ├── ocrWorker.js        ← Bill OCR processing
+    ├── refreshInsights.js  ← AI worker (forecast + festival)
+    ├── ocrWorker.js        ← Bill OCR → ledger + stock sync
     ├── forecastWorker.js   ← (legacy/unused — refreshInsights handles this)
     └── inventoryWorker.js  ← (legacy/unused — refreshInsights handles this)
 ```
@@ -892,21 +896,21 @@ On the backend, `/bills/upload` creates a bill record with `status: UPLOADED`, t
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  [ ↓ Income ]   [ ↑ Expense ]   ← animated toggle│
+│  [ ↓ Sale (Income) ]  [ ↑ Purchase (Expense) ]   │  ← animated toggle
 ├──────────────────────────────────────────────────┤
-│  Where did you buy (shop name)? *               │
+│  Where did you buy / sell? (shop name) *         │
 ├──────────────────────────────────────────────────┤
-│  📅  Date of Purchase: 15/01/2025  ›           │
+│  📅  Date: 15/01/2025  ›                        │
 ├──────────────────────────────────────────────────┤
-│  ₹  Total Amount *                              │
+│  ₹  Total Amount  (auto-calculated)             │
 ├──────────────────────────────────────────────────┤
-│  Items Purchased                  [+ Add Item]  │
-│  (optional section — shows placeholder if empty)│
+│  Items Sold / Items Purchased  [+ Pick Item]    │
+│  (shows spinner while inventory loads)           │
 │                                                  │
 │  ┌──────────────────────────────────────────┐   │
-│  │ Item 1                              [✕]  │   │
-│  │  Item Name                               │   │
-│  │  Qty  │  Price per item (₹)              │   │
+│  │ 📦 Basmati Rice                    ₹500 [✕]│  │
+│  │  Qty (kg)  │  Price per item (₹)         │   │
+│  │  ℹ New item · 10 kg will be added        │   │
 │  └──────────────────────────────────────────┘   │
 │                                                  │
 │  [ 💾 Save Bill ]                               │
@@ -915,29 +919,74 @@ On the backend, `/bills/upload` creates a bill record with `status: UPLOADED`, t
 
 **Transaction type toggle:**
 
-- "Income" (↓ arrow, green fill when selected)
-- "Expense" (↑ arrow, red fill when selected)
-- Animated with 200ms duration
+- "Sale (Income)" (↓ arrow, green fill when selected) — section label: "Items Sold"
+- "Purchase (Expense)" (↑ arrow, red fill when selected) — section label: "Items Purchased"
+- Animated with 200ms duration. Changing type clears line items.
 
-**Date picker:** Tapping the date row opens the system `DatePicker` dialog. Defaults to today. Range: 2020–today.
+**Date picker:** System `DatePicker`. Defaults to today.
 
-**Line items:** Optional. User can add any number of items. Each item has:
+**Total field:** Auto-calculated from `SUM(qty × unitPrice)` as items are filled in. Editable override.
 
-- Item Name (text)
-- Qty (number)
-- Price per item ₹ (decimal)
+#### Inventory loading
 
-**Submit flow:**
+On `initState`, fetches `GET /stocks?storeId=X` to populate the item picker. A loading spinner replaces the "Pick Item" button until stock is loaded.
+
+#### Item Picker (`_ItemPickerSheet`)
+
+A `DraggableScrollableSheet` (65%–92% of screen height) with:
+
+- **Search field** (autofocused) — live filters inventory by product name
+- **Item list** — each row shows product name + stock quantity (e.g. "12 kg in stock"); already-added items are hidden
+- **Footer button** — "Add \"[query]\" as new item" / "Add a new item not in inventory"
+  - Opens an AlertDialog to type the name and unit
+
+Two callbacks are distinct:
+
+- Tapping an inventory row → `onSelected(name, unit)` → `_onItemSelected(fromInventory: true)`
+- Typing a new item in the footer dialog → `onNewItem(name, unit)` → `_onItemSelected(fromInventory: false)`
+
+#### New-item flow during a Sale
+
+When `fromInventory: false` AND `transactionType == 'income'` (sale):
 
 ```
-POST /bills/manual
-{
-  storeId, merchant, date (ISO), total, transactionType,
-  lineItems: [{ name, qty, unitPrice }]
-}
+"[Item] is not in your inventory"
+How many do you currently have in stock?
+
+[ Current stock field ]
+
+[ Skip ]   [ Add to Inventory ]
 ```
 
-On success: SnackBar "Bill saved!" + navigate to `/dashboard/bills`.
+- **Skip**: adds item with `initialStock = 0` (stock row created, will immediately go to 0 after sale)
+- **Add to Inventory**: stores the entered count as `initialStock`
+
+New items during a **purchase** skip this dialog entirely — stock is created automatically by `syncStockAfterBill`.
+
+#### `_InventoryItemRow` widget
+
+Each selected item renders as a card with:
+
+- Item icon + name header
+- Line total shown when > 0 (auto-updates)
+- `Qty (unit)` + `Price per item ₹` inline text fields
+- Remove `✕` button
+- Info badge: _"New item · X units will be added to inventory"_ if `initialStock != null`
+- `onChanged` → triggers `_recalcTotal()` on parent
+
+#### Submit flow
+
+```
+1. Validate: at least 1 line item, merchant not empty
+2. For each new item with initialStock > 0:
+     POST /stocks { storeId, productName, quantity: initialStock, unit }
+3. POST /bills/manual
+     { storeId, merchant, date, total, transactionType,
+       lineItems: [{ name, qty, unitPrice, unit }] }
+     → server runs syncStockAfterBill inside the transaction
+4. SnackBar: "Bill saved & inventory updated!"
+5. Navigate to /dashboard/bills
+```
 
 ---
 
@@ -1009,31 +1058,34 @@ Add a bill and it will appear here
 
 All routes require JWT authentication (`authenticate` middleware) unless noted.
 
-| Method | Route                         | Auth | Purpose                                          |
-| ------ | ----------------------------- | ---- | ------------------------------------------------ |
-| POST   | `/auth/register`              | ❌   | Create account, returns tokens                   |
-| POST   | `/auth/login`                 | ❌   | Login, returns tokens + store info               |
-| POST   | `/auth/refresh`               | ❌   | Exchange refresh token for new access token      |
-| POST   | `/auth/logout`                | ✅   | Invalidate refresh token                         |
-| POST   | `/stores/setup`               | ✅   | Create store (onboarding step 2)                 |
-| GET    | `/bills`                      | ✅   | List all bills for user                          |
-| POST   | `/bills/upload`               | ✅   | Upload bill image (multipart), starts OCR job    |
-| POST   | `/bills/manual`               | ✅   | Manual bill entry, directly creates ledger entry |
-| GET    | `/ledger/entries`             | ✅   | List ledger entries (`?limit=200`)               |
-| GET    | `/analytics/sales-trends`     | ✅   | Daily sales for last N days                      |
-| GET    | `/analytics/product-rankings` | ✅   | Top N products by sales velocity                 |
-| GET    | `/ai/insights`                | ✅   | Read cached AI insights (pure DB read)           |
-| GET    | `/ai/jobs/:id`                | ✅   | Check OCR job status                             |
-| GET    | `/ai/jobs/:id/result`         | ✅   | Get OCR job result                               |
-| GET    | `/stocks`                     | ✅   | List stock items for store                       |
-| POST   | `/stocks`                     | ✅   | Add new stock item                               |
-| PUT    | `/stocks/:id`                 | ✅   | Update stock item (qty, unit, price)             |
-| DELETE | `/stocks/:id`                 | ✅   | Remove stock item                                |
-| GET    | `/order-items`                | ✅   | List order items for store                       |
-| POST   | `/order-items`                | ✅   | Add item to order list                           |
-| PATCH  | `/order-items/:id`            | ✅   | Update qty or unit                               |
-| DELETE | `/order-items/:id`            | ✅   | Remove one order item                            |
-| DELETE | `/order-items`                | ✅   | Clear all order items for a store (`?storeId=X`) |
+| Method | Route                         | Auth | Purpose                                               |
+| ------ | ----------------------------- | ---- | ----------------------------------------------------- |
+| POST   | `/auth/register`              | ❌   | Create account, returns tokens                        |
+| POST   | `/auth/login`                 | ❌   | Login, returns tokens + store info                    |
+| POST   | `/auth/refresh`               | ❌   | Exchange refresh token for new access token           |
+| POST   | `/auth/logout`                | ✅   | Invalidate refresh token                              |
+| POST   | `/stores/setup`               | ✅   | Create store (onboarding step 2)                      |
+| GET    | `/bills`                      | ✅   | List bills — JOINs merchant, amount, type, item count |
+| GET    | `/bills/:id`                  | ✅   | Bill detail + nested `entry.lineItems[]`              |
+| GET    | `/bills/:id/status`           | ✅   | Poll OCR processing status                            |
+| POST   | `/bills/upload`               | ✅   | Upload bill image (multipart), starts OCR job         |
+| POST   | `/bills/manual`               | ✅   | Manual bill entry → ledger + stock sync (atomic)      |
+| GET    | `/ledger/entries`             | ✅   | List ledger entries (`?limit=200`)                    |
+| GET    | `/analytics/sales-trends`     | ✅   | Daily sales for last N days                           |
+| GET    | `/analytics/product-rankings` | ✅   | Top N products by sales velocity                      |
+| GET    | `/analytics/activity`         | ✅   | Hour/day-of-week transaction heatmap                  |
+| GET    | `/ai/insights`                | ✅   | Read cached AI insights (pure DB read)                |
+| GET    | `/ai/jobs/:id`                | ✅   | Check OCR job status                                  |
+| GET    | `/ai/jobs/:id/result`         | ✅   | Get OCR job result                                    |
+| GET    | `/stocks`                     | ✅   | List stock items for store                            |
+| POST   | `/stocks`                     | ✅   | Add new stock item                                    |
+| PUT    | `/stocks/:id`                 | ✅   | Update stock item (qty, unit, price)                  |
+| DELETE | `/stocks/:id`                 | ✅   | Remove stock item                                     |
+| GET    | `/order-items`                | ✅   | List order items for store                            |
+| POST   | `/order-items`                | ✅   | Add item to order list                                |
+| PATCH  | `/order-items/:id`            | ✅   | Update qty or unit                                    |
+| DELETE | `/order-items/:id`            | ✅   | Remove one order item                                 |
+| DELETE | `/order-items`                | ✅   | Clear all order items for a store (`?storeId=X`)      |
 
 ---
 
@@ -1054,22 +1106,77 @@ Single endpoint: `POST /stores/setup`. Creates a record in `stores` table. Retur
 
 ### 9.5 Bills Module
 
+**Shared utility: `utils/stockSync.js`**
+
+Both OCR and manual bill flows use the same `syncStockAfterBill(client, userId, storeId, transactionType, lineItems)` function, which runs **inside the active DB transaction**:
+
+```
+transactionType === 'expense' (purchase)
+  → INSERT stock_item with qty  ON CONFLICT DO UPDATE quantity += qty
+
+transactionType === 'income' (sale)
+  → INSERT stock_item with qty=0  ON CONFLICT DO NOTHING  (guarantee row exists)
+  → UPDATE SET quantity = GREATEST(0, quantity - sold)
+```
+
+This means: if a bill creation fails, the inventory is never touched (atomically safe).
+
 **OCR flow (`POST /bills/upload`):**
 
-1. Image saved to storage (S3 or local disk)
+1. Image saved to local disk (`/app/uploads`)
 2. `bills` record created with `status: UPLOADED`, `source: 'ocr'`
 3. `ocrWorker` dispatched (worker thread)
-4. Worker sends image to Gemini Vision → extracts merchant name, date, total, line items
-5. Creates `ledger_entry` + `line_items` records
+4. Worker sends image to Gemini Vision with updated prompt:
+   - Extracts: merchant, date, total, **`transactionType` (income/expense)**, and per-item **`unit`**
+5. Inside a DB transaction: creates `ledger_entry` + `line_items` (with `unit`) + calls `syncStockAfterBill`
 6. Updates bill `status → COMPLETED`
-7. If worker fails: `status → FAILED`
+7. If worker fails anywhere: ROLLBACK + `status → FAILED`
 
 **Manual flow (`POST /bills/manual`):**
 
-1. Creates `bills` record with `source: 'manual'`, `status: COMPLETED` immediately
-2. Creates `ledger_entry` with all provided fields
-3. Creates `line_items` for each item in the array
-4. Calls `checkAndRefreshIfNeeded()` — if 20+ new ledger entries since last AI run, triggers background refresh
+1. Validates: `merchant`, `date`, `total` required; `lineItems` must be a non-empty array; `transactionType` must be `'income'` or `'expense'`
+2. Inside a DB transaction:
+   - Creates `bills` record (`source: 'manual'`, `status: COMPLETED`)
+   - Creates `ledger_entry` with all provided fields
+   - Creates `line_items` (stores `unit` per item)
+   - Calls `syncStockAfterBill`
+3. COMMIT
+
+**`GET /bills`** — returns bills enriched with ledger data:
+
+```sql
+SELECT b.*, le.merchant, le.transaction_date, le.total_amount,
+       le.transaction_type, COUNT(li.id)::int AS item_count
+FROM bills b
+LEFT JOIN ledger_entries le ON le.bill_id = b.id
+LEFT JOIN line_items li ON li.ledger_entry_id = le.id
+WHERE b.user_id = $1  [AND b.store_id = $2]
+GROUP BY b.id, le.merchant, le.transaction_date, le.total_amount, le.transaction_type
+ORDER BY b.created_at DESC LIMIT 50
+```
+
+**`GET /bills/:id`** — returns the bill with nested entry and line items:
+
+```json
+{
+  "id": "...",
+  "status": "COMPLETED",
+  "entry": {
+    "merchant": "City Wholesale",
+    "transaction_type": "expense",
+    "total_amount": "1250.00",
+    "lineItems": [
+      {
+        "product_name": "Rice",
+        "quantity": 5,
+        "unit": "kg",
+        "unit_price": 50,
+        "total_price": 250
+      }
+    ]
+  }
+}
+```
 
 ---
 
@@ -1147,17 +1254,20 @@ Returns `{ forecast, inventory, festival[], generatedAt }`.
 
 This endpoint also calls `checkAndRefreshIfNeeded()` **in the background** — if the data is stale, a new AI generation starts without blocking the response. The response always returns whatever is currently in the cache.
 
+Returns `{ forecast, festival[], generatedAt }`. The `inventory` key was removed — stock health is derived from live `stock_items` data instead.
+
 ---
 
 ## 10. The AI System (Deep Dive)
 
-### 10.1 Three Insight Types
+### 10.1 Insight Types
 
-| Type      | DB `type` column | What it contains                                                |
-| --------- | ---------------- | --------------------------------------------------------------- |
-| Forecast  | `forecast`       | 30-day daily sales prediction + 1-sentence summary              |
-| Inventory | `inventory`      | List of stock alerts (product, days left, reorder qty, urgency) |
-| Festival  | `festival`       | Array of upcoming festival objects with product recommendations |
+| Type     | DB `type` column | What it contains                                                |
+| -------- | ---------------- | --------------------------------------------------------------- |
+| Forecast | `forecast`       | 30-day daily sales prediction + 1-sentence summary              |
+| Festival | `festival`       | Array of upcoming festival objects with product recommendations |
+
+> **Removed:** The `inventory` insight type (stock alerts) was removed — it duplicated information already available directly from the `stock_items` table in real-time. Inventory health is now driven by live data in the Stocks screen, not by a cached AI snapshot.
 
 All three are stored in the `ai_insights` table with `UNIQUE(store_id, type)` — so there is always exactly one row per type per store, updated in place.
 
@@ -1191,9 +1301,10 @@ This is the only file that calls Gemini. It runs in a Node.js worker thread.
 
 **Execution order:**
 
-1. `generateInventory()` — most critical for day-to-day
+1. `generateForecast()` — 30-day sales prediction from last 90 days of data
 2. `generateFestivals()` — per-festival, up to 45 days ahead
-3. (forecast generation is present in older code but the scheduler only runs inventory + festivals in the latest version)
+
+> `generateInventory()` was removed. Inventory alerts are derived from live stock data; there is no AI-generated inventory insight anymore.
 
 **`upsertInsight(type, data, ledgerCount)`:**
 
@@ -1330,7 +1441,8 @@ line_items (
   product_name      VARCHAR(255) NOT NULL,
   quantity          DECIMAL(10,2) NOT NULL DEFAULT 1,
   unit_price        DECIMAL(10,2) NOT NULL,
-  total_price       DECIMAL(10,2) NOT NULL
+  total_price       DECIMAL(10,2) NOT NULL,
+  unit              VARCHAR(50) DEFAULT 'units'   -- added Feb 2026
 )
 
 -- AI Jobs (OCR processing queue)
@@ -1423,18 +1535,22 @@ CREATE INDEX idx_stores_user          ON stores(user_id);
 
 ### Stock Management
 
-- Product name is the unique key within a store — you cannot have two "Rice" entries
+- Product name is the unique key within a store (`UNIQUE(store_id, product_name)`) — you cannot have two "Rice" entries
 - Cost price is optional but improves AI reorder cost estimates
 - Quantities can be decimal (10.5 kg), but display rounds to integer when `qty % 1 == 0`
-- The "Ordered — Update Stock" action only updates quantities for products whose names **exactly match** (case-insensitive) an existing stock item. New products in the order list are NOT auto-created in stock.
+- Stock is updated automatically whenever a bill is created (manual or OCR). The update runs **inside the bill's DB transaction** — if the bill fails, stock is not changed.
+  - Purchase (expense): `quantity += sold` per line item
+  - Sale (income): `quantity = GREATEST(0, quantity - sold)` per line item (never goes negative)
+- **"Ordered — Update Stock"**: loops through each order item and calls `POST /stocks` (upsert by product name). This **creates** new stock items if they don't exist yet, and **sets** quantity for existing ones. It does not increment — it sets the quantity to the ordered amount.
+- New items sold during bill entry that aren't in inventory trigger a stock-count dialog. The app pre-creates the stock row (`POST /stocks` with `initialStock`), then the bill sync decrements from it.
 
 ### Order List
 
 - Fully persistent via the backend — survives app restarts, reinstalls (as long as the account exists)
 - All mutations are optimistic: UI updates instantly, reverts on network failure
 - A product can only appear once (UNIQUE constraint). Calling `add()` for an existing product is a no-op (the `contains()` check prevents duplicates in the UI, but the backend also enforces uniqueness)
-- `markAllOrdered()` (from "Clear List") does NOT update stock quantities — it just empties the list
-- `markAllOrdered()` (from "Ordered — Update Stock") DOES update stock quantities first, then empties the list
+- **"Clear List"** button: confirm dialog → `DELETE /order-items?storeId=X` — empties list **without** touching stock quantities
+- **"Ordered — Update Stock"** button: `POST /stocks` (upsert) for every order item (creates new stock rows if needed, sets quantity to ordered qty), then `DELETE /order-items?storeId=X` to clear the list. Shows SnackBar with count.
 
 ### AI System
 
