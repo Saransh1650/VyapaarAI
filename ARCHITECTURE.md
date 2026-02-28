@@ -62,7 +62,7 @@ which festivals are coming — and acts on it with one tap.
 **Three tabs, three jobs:**
 
 - **Home** → See today's numbers and the most urgent AI actions
-- **Smart Advice** → Detailed AI insights: forecast, inventory health, festival prep
+- **Smart Advice** → Context-aware guidance cards: stock health, trends, festival prep — all data-driven, no numerical predictions
 - **Inventory** → See what's in stock, what to order, confirm orders
 
 ---
@@ -178,7 +178,7 @@ ai_khata/lib/
     ├── dashboard/
     │   └── dashboard_screen.dart   ← Shell + home content (1208 lines)
     ├── insights/
-    │   └── insights_screen.dart    ← Smart Advice tab (1220 lines)
+    │   └── insights_screen.dart    ← Smart Advice tab — guidance cards (stock_check, pattern, event_context, info)
     ├── stocks/
     │   ├── stock_screen.dart       ← Inventory tab (968 lines)
     │   └── order_list_provider.dart← OrderListProvider (ChangeNotifier)
@@ -207,7 +207,7 @@ AI_Khata_backend/src/
 ├── utils/
 │   └── stockSync.js        ← Shared inventory-sync logic (manual bills + OCR)
 └── workers/
-    ├── refreshInsights.js  ← AI worker (forecast + festival)
+    ├── refreshInsights.js  ← AI worker (single guidance prompt from DB data)
     ├── ocrWorker.js        ← Bill OCR → ledger + stock sync
     ├── forecastWorker.js   ← (legacy/unused — refreshInsights handles this)
     └── inventoryWorker.js  ← (legacy/unused — refreshInsights handles this)
@@ -581,121 +581,119 @@ Two equal-width tiles:
 
 ---
 
-### 8.4 Smart Advice Tab
+### 8.4 Smart Advice Tab — Context-Aware Guidance
 
 **Route:** `/dashboard/advice` (tab index 1)  
 **File:** `lib/features/insights/insights_screen.dart`
 
-> **Critical rule:** This screen is a **read-only view** of the AI insights cache. Pull-to-refresh only re-reads from the database. The app has no way to trigger a new AI generation.
+> **Critical rule:** This screen is a **read-only view** of the AI guidance cache. Pull-to-refresh only re-reads from the database. The app has no way to trigger a new AI generation.
+
+> **Design philosophy:** No numerical predictions. No sales forecasts. No revenue estimates. Only qualitative, data-driven, shopkeeper-friendly guidance cards.
 
 #### Data Loading
 
 ```
 GET /ai/insights?storeId={X}&storeType={Y}
-→ returns: { forecast, inventory, festival[], generatedAt }
+→ returns: { guidance: { mode, guidance[] }, generatedAt }
 ```
 
 The `generatedAt` timestamp is shown as a humanised "Updated Xm/h ago" badge at the top.
 
-#### Three Sections
+#### Mode: NORMAL vs EVENT
+
+- **NORMAL** — Default. No festival banner.
+- **EVENT** — When an upcoming festival is ≤ 10 days away. A warm amber **"Festival Mode"** banner appears at the top, naming the festival.
+
+#### Four Card Types
+
+The `guidance[]` array contains objects with `type` field. The app renders them in order:
 
 ---
 
-**📅 Coming up for your shop**
-
-Shown only when `festival[]` is non-empty. One `_UpcomingEventCard` per festival.
-
-Each card has:
+**📦 Stock Health (`_StockCheckCard`, type: `stock_check`)**
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│  🪔  Diwali                      ┌─────────────┐          │
-│      ┌──────────────┐            │ Could earn  │          │
-│      │ In 12 days   │            │  +₹24K      │          │
-│      └──────────────┘            │  extra      │          │
-│                                  └─────────────┘          │
-│  ✨ You still have a few days to prepare. Customers       │
-│     will be looking for things like Diyas and Sweets.     │
-│     Stock up now and you won't miss the sales.            │
-│                                                            │
-│  What to stock up on:                                      │
-│  ┌──────────────────────────────────────────────────────┐ │
-│  │ TOP  Diyas           ↑30%              [+ Order]    │ │
-│  │      Sweets                            [+ Order]    │ │
-│  └──────────────────────────────────────────────────────┘ │
-│  ┌──────────────────────────────────────────────────┐     │
-│  │  Add all to order list →                         │     │
-│  └──────────────────────────────────────────────────┘     │
-└────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  📦  Stock Health                      [2 low] [1 watch]   │
+│  ───────────────────────────────────────────────────────── │
+│  ✅ Rice                                        [Good]     │
+│     Enough supply based on recent sales                     │
+│                                                             │
+│  ⚠️ Oil                                        [Watch]    │
+│     3-4 days left at this pace                              │
+│     → Keep an eye, may need restocking soon                │
+│                                                             │
+│  🔴 Sugar                                       [Low]      │
+│     Selling fast, very little left                          │
+│     → Restock soon                                          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-- Event emoji is determined by festival name (🪔 for Diwali, 🌈 for Holi, 🌙 for Eid, etc.)
-- Days away badge: "Today!" / "Tomorrow" / "In X days" / "Next week"
-- Urgency: ≤7 days → warning orange border; >7 days → primary saffron border
-- "Could earn +₹{X}K" badge (calculated as `recs.length × 4800 / 1000`)
-- AI advisor pitch (human tone, specific to products)
-- Product rows: top pick gets "TOP" tag + highlighted background; others are quieter
-- Each product row has individual "Order" / "✓ Added" toggle tied to `OrderListProvider`
-- "Add all to order list" button: adds all products at once with reason "{festival} in X days"; changes to "✓ All added to order list" (green, disabled)
+- Header shows summary badges counting LOW and WATCH items
+- Each item row: status icon (green ✅ / amber ⚠️ / red 🔴) + product name + status badge
+- Below product name: AI-generated `reason` (short) + `action` (in status colour with → prefix)
+- Max 8 items per card
+- Status values: `GOOD` (green), `WATCH` (amber), `LOW` (red)
 
 ---
 
-**🔮 What to expect next month (`_HumanForecastCard`)**
+**📈 Trend (`_PatternCard`, type: `pattern`)**
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│  ✨ "Sales should be steady this month with a slight       │
-│      uptick in the second week."                           │
-│  ──────────────────────────────────────────────────────   │
-│  Expected this month                                       │
-│  ₹2.4L                                                     │
-│  Second week looks stronger                                │
-│                                                            │
-│  ┌──────────────┐  ┌──────────────┐                       │
-│  │ 📈           │  │ 📉           │                       │
-│  │ Best day     │  │ Slower day   │                       │
-│  │ 03-14        │  │ 03-22        │                       │
-│  └──────────────┘  └──────────────┘                       │
-│                                                            │
-│  💡 Consider running a small offer on your slower         │
-│     day to bring more customers in.                       │
-└────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  📈  Trend                                                  │
+│                                                             │
+│  Rice demand has been picking up over the last two weeks.   │
+│                                                             │
+│  💡 Keep enough stock ready to avoid missing sales          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Data computed client-side from the 30-day forecast array:
-
-- `week1` = sum of days 1–7; `week2` = sum of days 8–14 → determines trend label
-- `peakDay` and `slowDay` = max/min predicted values in the 30-day period
-- `totalPredicted` = sum of all 30 days → displayed as ₹X.XL
+- Simple observation + actionable tip
+- 0–2 pattern cards per guidance response
+- Action is shown in a rounded saffron chip with lightbulb icon
 
 ---
 
-**📦 Stock to sort out (`_InventoryHealthSummary`)**
+**🎉 Festival Prep (`_EventContextCard`, type: `event_context`)**
 
-Health banner first:
+Only appears when `mode == "EVENT"` (festival ≤ 10 days away).
 
 ```
-✅  All your stock looks healthy          (green border, green text)
-  No action needed right now.
-
-— or —
-
-⚠️  Some items need ordering soon        (red border, red text)
-  2 running out fast · 1 getting low
+┌─────────────────────────────────────────────────────────────┐
+│  🎉  Holi Prep                                              │
+│  ───────────────────────────────────────────────────────── │
+│  ✅ Snacks                              [In Stock]  [Order] │
+│     Increase stock slightly                                 │
+│                                                             │
+│  ✨ Gulal                              [Opportunity] [Order] │
+│     Optional — customers may look for this                  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Then a list of `_AlertCard`s for each alert. Each card shows:
+- Warm amber gradient header with festival name
+- Each item shows classification badge:
+  - **In Stock** (saffron) — product already in inventory, AI suggests action
+  - **Opportunity** (amber) — new item the shop doesn't carry, labeled clearly as optional
+- Each row has an "Order" / "✓ Added" toggle tied to `OrderListProvider`
 
-- 🔴/🟡 emoji + product name + "Order Now" / "Plan Restock" / "✓ In list" button
-- Days remaining: "⏰ Runs out tomorrow" / "About X days of stock left"
-- "Order about X units to be safe" in saffron
-- AI tip in a grey rounded box (💡 icon)
+---
 
-The "Order Now" / "Plan Restock" button adds to `OrderListProvider` with the AI-suggested `reorderQty` and reason.
+**ℹ️ Info (`_GuidanceInfoCard`, type: `info`)**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ℹ️  Keep adding bills. Guidance improves as your shop     │
+│      data grows.                                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- Grey surface background, info icon + text
+- Appears when data is insufficient, or as a general tip
 
 #### Empty State
 
-When no AI insights exist yet:
+When no guidance exists yet:
 
 ```
         ✨
@@ -1250,11 +1248,9 @@ See full detail in [Section 10](#10-the-ai-system-deep-dive).
 SELECT type, data, generated_at FROM ai_insights WHERE store_id = $1 ORDER BY generated_at DESC
 ```
 
-Returns `{ forecast, inventory, festival[], generatedAt }`.
+Returns `{ guidance: { mode, guidance[] }, generatedAt }`.
 
 This endpoint also calls `checkAndRefreshIfNeeded()` **in the background** — if the data is stale, a new AI generation starts without blocking the response. The response always returns whatever is currently in the cache.
-
-Returns `{ forecast, festival[], generatedAt }`. The `inventory` key was removed — stock health is derived from live `stock_items` data instead.
 
 ---
 
@@ -1262,14 +1258,13 @@ Returns `{ forecast, festival[], generatedAt }`. The `inventory` key was removed
 
 ### 10.1 Insight Types
 
-| Type     | DB `type` column | What it contains                                                |
-| -------- | ---------------- | --------------------------------------------------------------- |
-| Forecast | `forecast`       | 30-day daily sales prediction + 1-sentence summary              |
-| Festival | `festival`       | Array of upcoming festival objects with product recommendations |
+| Type     | DB `type` column | What it contains                                                                                      |
+| -------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
+| Guidance | `guidance`       | Full structured response: `{ mode, guidance[] }` with stock_check, pattern, event_context, info cards |
 
-> **Removed:** The `inventory` insight type (stock alerts) was removed — it duplicated information already available directly from the `stock_items` table in real-time. Inventory health is now driven by live data in the Stocks screen, not by a cached AI snapshot.
+> **Replaced:** The old `forecast` and `festival` types were replaced by a single `guidance` type. The worker now makes one AI call per store that combines inventory analysis, trend detection, and festival context into structured guidance cards. Legacy rows (`forecast`, `festival`, `inventory`) are cleaned up automatically on next refresh.
 
-All three are stored in the `ai_insights` table with `UNIQUE(store_id, type)` — so there is always exactly one row per type per store, updated in place.
+Stored in the `ai_insights` table with `UNIQUE(store_id, type)` — exactly one `guidance` row per store, updated in place.
 
 ---
 
@@ -1299,12 +1294,34 @@ AI generation is **never triggered by the app**. It runs under two conditions:
 
 This is the only file that calls Gemini. It runs in a Node.js worker thread.
 
-**Execution order:**
+**Execution flow:**
 
-1. `generateForecast()` — 30-day sales prediction from last 90 days of data
-2. `generateFestivals()` — per-festival, up to 45 days ahead
+1. **Gather data from DB** (all in parallel):
+   - `getInventory()` — all stock items for the store: `{ product, quantity, unit }`
+   - `getRecentSales()` — top 20 products by sales in the last 28 days, each classified as `rising`, `stable`, `slowing`, or `new` by comparing last-14-day qty to prior-14-day qty
+   - `getShopActivity()` — this-week vs last-week transaction count → `recentBusiness` (`growing`/`steady`/`slowing`/`quiet`/`starting`) + top 3 busiest days of week
+   - `getClosestFestival()` — the nearest festival within 45 days from `festivalCalendar.js` → `{ name, daysAway }` (only name and days, no details — AI must infer)
 
-> `generateInventory()` was removed. Inventory alerts are derived from live stock data; there is no AI-generated inventory insight anymore.
+2. **Build input JSON** — assembled into the structure the prompt expects:
+
+   ```json
+   {
+     "storeType": "grocery",
+     "todayDate": "2026-03-01",
+     "inventory": [{ "product": "Rice", "quantity": 12, "unit": "kg" }],
+     "recentSales": [{ "product": "Rice", "trend": "stable" }],
+     "shopActivity": { "recentBusiness": "steady", "busyDays": ["Saturday"] },
+     "upcomingFestival": { "name": "Holi", "daysAway": 6 }
+   }
+   ```
+
+3. **Send to Gemini** — single `generateGuidance(input)` call with the context-aware prompt
+
+4. **Validate & upsert** — checks response has `mode` + `guidance[]`; falls back gracefully
+
+5. **Clean up legacy rows** — deletes old `forecast`/`festival`/`inventory` types from `ai_insights`
+
+**Fallback when no data:** If both inventory and recentSales are empty, the worker skips the AI call and stores a fallback: `{ mode: "NORMAL", guidance: [{ type: "info", insight: "Keep adding bills..." }] }`
 
 **`upsertInsight(type, data, ledgerCount)`:**
 
@@ -1316,58 +1333,51 @@ This means: **a failed or empty AI response never overwrites working cached data
 
 ---
 
-### 10.4 Anti-Hallucination Rule
+### 10.4 Anti-Hallucination Rules
 
-The festival prompt contains an explicit constraint:
+The new guidance system uses **inventory-first logic** — the AI only sees what the shop actually has and sells. Key constraints:
 
-> "Products this store actually sells (last 30 days): [list of product names from salesVelocity query]. ONLY recommend from these. Do NOT invent items the store doesn't sell."
-
-The `catalogList` is built from:
-
-```sql
-SELECT li.product_name FROM line_items li
-JOIN ledger_entries le ON ...
-WHERE le.user_id=$1 AND le.transaction_date >= NOW() - INTERVAL '30 days'
-GROUP BY li.product_name ORDER BY total_qty_30d DESC LIMIT 20
-```
-
-If the store has no recent sales history, the constraint is relaxed: "No catalog available — suggest realistic {festival} items for a {storeType} store."
+1. **Database is truth** — the prompt explicitly tells the AI: "only reason from the data provided below." No external knowledge about typical store inventories.
+2. **Festival knowledge must be inferred** — the AI only receives `{ name, daysAway }` for festivals. It must internally understand what Holi or Diwali means but ground all recommendations in the shop's actual inventory and sales data.
+3. **Existing products preferred** — in `event_context` cards, items from the shop's inventory get `classification: "existing_product"`. Genuinely new suggestions (items the shop doesn't stock) get `classification: "opportunity"` to clearly signal they're optional.
+4. **No numerical predictions** — the prompt forbids sales numbers, percentages, forecasts, and revenue estimates. Only qualitative reasoning is allowed.
 
 ---
 
-### 10.5 Gemini Prompts (summarised)
+### 10.5 Gemini Prompt (Context-Aware Guidance)
 
-**Forecast prompt:**
-
-```
-You are a demand forecasting AI for a {storeType} retail store.
-Historical daily sales data (last 90 days): [...].
-Predict daily sales for the next 30 days.
-Return ONLY valid JSON: { forecast: [{date, predicted, confidenceLow, confidenceHigh}], summary: "..." }
-```
-
-**Inventory prompt:**
+A single prompt handles all guidance types. Core structure:
 
 ```
-You are an inventory manager for a {storeType} retail shop. Today is {date}.
-Current stock: [...]. Last-30-day sales velocity per product: [...].
-For each product at risk: compute days left (qty / daily_velocity).
-Return alerts for urgency HIGH (≤3 days) and MEDIUM (4-10 days) only.
-Return ONLY valid JSON: { alerts: [{product, currentStock, unit, dailyVelocity,
-estimatedDaysLeft, reorderQty, urgency, actionText}] }
-```
+You are a shop advisor for a {storeType} retail shop in India. Today is {date}.
 
-**Festival prompt (per event):**
+CORE RULES:
+1. Database is truth — only reason from the data provided below.
+2. No numerical predictions.
+3. Think like a shopkeeper's trusted advisor.
+4. Qualitative reasoning only.
 
-```
-You are a festival sales advisor for a {storeType} retail shop in India.
-Festival: {name} — {daysAway} days away.
-Last year sales during this festival: [...].
-Products this store actually sells: [CATALOG].
-CRITICAL RULE: Recommend ONLY products from the catalog above.
-Return ONLY valid JSON: { festival, date, daysAway, totalEstimatedBoost,
-festivalTip, recommendations: [{product, recommendedQty, stockGap,
-estimatedExtraRevenue, urgencyToBuy, tip}] }
+INPUT DATA: { storeType, todayDate, inventory[], recentSales[], shopActivity, upcomingFestival }
+
+REASONING STEPS (internal only):
+1. Stock Readiness → classify items: GOOD / WATCH / LOW
+2. Pattern Understanding → rising/slowing/new trends
+3. Festival Context (if daysAway ≤ 10) → which existing products are affected
+4. Produce guidance cards
+
+OUTPUT: { mode: "NORMAL|EVENT", guidance: [
+  { type: "stock_check", items: [{ product, status, reason, action }] },
+  { type: "pattern", insight, action },
+  { type: "event_context", event, items: [{ product, classification, action }] },
+  { type: "info", insight }
+] }
+
+CARD RULES:
+- stock_check: always include if inventory exists, max 8 items
+- pattern: 0-2 cards if trends are notable
+- event_context: only when mode is EVENT
+- info: when data is thin or as a general tip
+- Tone: short, shopkeeper-friendly, no jargon
 ```
 
 ---
@@ -1473,7 +1483,7 @@ ai_insights (
   id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   store_id                   UUID REFERENCES stores(id) ON DELETE CASCADE,
   type                       VARCHAR(50) NOT NULL
-                             CHECK (type IN ('forecast','inventory','festival')),
+                             CHECK (type IN ('guidance','forecast','inventory','festival')),  -- guidance is the active type; others are legacy
   data                       JSONB NOT NULL,
   generated_at               TIMESTAMP DEFAULT NOW(),
   ledger_count_at_generation INTEGER DEFAULT 0,
@@ -1557,7 +1567,10 @@ CREATE INDEX idx_stores_user          ON stores(user_id);
 - The app is **read-only** with respect to AI — it can only call `GET /ai/insights`
 - AI refresh is triggered by time (3× daily) or activity (every 20 new ledger entries), never by the user
 - Bad/empty AI responses are silently discarded; the cache is never overwritten with junk data
-- Festival recommendations are constrained to the store's own product catalog to prevent hallucination
+- **Context-Aware Guidance**: single AI call per store that combines inventory, trends, and festival context into structured guidance cards (stock_check, pattern, event_context, info)
+- **No numerical predictions**: the AI is explicitly forbidden from returning sales numbers, percentages, forecasts, or revenue estimates — qualitative reasoning only
+- **Inventory-first logic**: AI evaluates existing stock → detects patterns → checks festival relevance → suggests opportunities. New items are clearly labeled as "opportunity"
+- Festival knowledge is inferred from name alone — the AI only receives `{ name, daysAway }`, not cultural details
 - AI workers are staggered 10 seconds apart when multiple stores refresh at the same time (scheduler runs)
 - In-flight deduplication: `refreshInFlight` Set prevents two simultaneous refreshes for the same store
 

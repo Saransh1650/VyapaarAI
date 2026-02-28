@@ -5,8 +5,9 @@ import '../../core/theme.dart';
 import '../auth/auth_service.dart';
 import '../stocks/order_list_provider.dart';
 
-/// Smart Advice screen — reads from backend cache only. No AI is called from the app.
-/// The backend auto-refreshes insights every 24h or after 20 new ledger entries.
+/// Smart Advice screen — renders AI guidance cards from the backend cache.
+/// The backend auto-refreshes guidance daily or after 20 new ledger entries.
+/// Card types: stock_check, pattern, event_context, info.
 class InsightsScreen extends StatefulWidget {
   const InsightsScreen({super.key});
   @override
@@ -14,10 +15,11 @@ class InsightsScreen extends StatefulWidget {
 }
 
 class _InsightsScreenState extends State<InsightsScreen> {
-  Map<String, dynamic>? _insights;
+  Map<String, dynamic>? _guidance;
   bool _loading = false;
   bool _refreshing = false;
   String? _error;
+  String? _generatedAt;
 
   @override
   void initState() {
@@ -36,10 +38,17 @@ class _InsightsScreenState extends State<InsightsScreen> {
         '/ai/insights',
         queryParameters: {'storeId': auth.storeId, 'storeType': auth.storeType},
       );
-      if (mounted) setState(() => _insights = res.data['insights']);
+      final insights = res.data['insights'];
+      if (mounted) {
+        setState(() {
+          _guidance = insights?['guidance'] as Map<String, dynamic>?;
+          _generatedAt = insights?['generatedAt']?.toString();
+        });
+      }
     } catch (_) {
-      if (mounted)
-        setState(() => _error = 'Could not load tips. Pull down to retry.');
+      if (mounted) {
+        setState(() => _error = 'Could not load advice. Pull down to retry.');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -49,8 +58,6 @@ class _InsightsScreenState extends State<InsightsScreen> {
     if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
-      // Only re-fetch from cache — the GET endpoint triggers background
-      // refresh automatically when data is stale. Never call the AI directly.
       await _loadInsights();
     } finally {
       if (mounted) setState(() => _refreshing = false);
@@ -79,7 +86,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
       );
     }
 
-    if (_error != null && _insights == null) {
+    if (_error != null && _guidance == null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -109,10 +116,10 @@ class _InsightsScreenState extends State<InsightsScreen> {
       );
     }
 
-    final festivals = (_insights?['festival'] as List?) ?? [];
-    final forecast = _insights?['forecast'] as Map<String, dynamic>?;
-    final generatedAt = _insights?['generatedAt']?.toString();
-    final hasAnyData = festivals.isNotEmpty || forecast != null;
+    final mode = _guidance?['mode'] as String? ?? 'NORMAL';
+    final cards = (_guidance?['guidance'] as List?) ?? [];
+    final isEvent = mode == 'EVENT';
+    final hasData = cards.isNotEmpty;
 
     return RefreshIndicator(
       color: AppTheme.primary,
@@ -123,8 +130,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Last updated badge
-            if (generatedAt != null)
+            // ── Updated timestamp ──────────────────────────────────
+            if (_generatedAt != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 14),
                 child: Row(
@@ -136,7 +143,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      'Updated ${_timeAgo(generatedAt)}',
+                      'Updated ${_timeAgo(_generatedAt)}',
                       style: const TextStyle(
                         color: AppTheme.textHint,
                         fontSize: 12,
@@ -162,99 +169,843 @@ class _InsightsScreenState extends State<InsightsScreen> {
                 ),
               ),
 
-            if (!hasAnyData) ...[
-              const _EmptyInsightsState(),
-            ] else ...[
-              // ── Coming up for your shop ─────────────────────────────
-              if (festivals.isNotEmpty) ...[
-                _ConversationalSectionLabel(
-                  icon: Icons.event_outlined,
-                  title: 'Upcoming Events',
-                  subtitle: festivals.length == 1
-                      ? '1 event in the next 45 days'
-                      : '${festivals.length} events coming up',
+            // ── Event mode banner ─────────────────────────────────
+            if (isEvent) _EventModeBanner(cards: cards),
+
+            // ── Guidance cards ─────────────────────────────────────
+            if (!hasData)
+              const _EmptyState()
+            else
+              ...cards.map((c) {
+                final card = c as Map<String, dynamic>;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: _buildCard(card),
+                );
+              }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCard(Map<String, dynamic> card) {
+    switch (card['type']) {
+      case 'stock_check':
+        return _StockCheckCard(card);
+      case 'pattern':
+        return _PatternCard(card);
+      case 'event_context':
+        return _EventContextCard(card);
+      case 'info':
+        return _GuidanceInfoCard(card);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EVENT MODE BANNER
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _EventModeBanner extends StatelessWidget {
+  final List cards;
+  const _EventModeBanner({required this.cards});
+
+  Map<String, dynamic>? _eventCard() {
+    for (final c in cards) {
+      if (c is Map && c['type'] == 'event_context') return c as Map<String, dynamic>;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ec = _eventCard();
+    final event = ec?['event'] as String?;
+    final summary = ec?['summary'] as String?;
+    final items = (ec?['items'] as List?) ?? [];
+    final criticalCount = items.where((i) => (i['urgency'] as String?) == 'critical').length;
+    final highCount = items.where((i) => (i['urgency'] as String?) == 'high').length;
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppTheme.error.withOpacity(criticalCount > 0 ? 0.12 : 0.06),
+            AppTheme.warning.withOpacity(0.12),
+            AppTheme.primary.withOpacity(0.06),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: criticalCount > 0
+              ? AppTheme.error.withOpacity(0.35)
+              : AppTheme.warning.withOpacity(0.3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: AppTheme.warning.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                const SizedBox(height: 14),
-                ...festivals.map(
-                  (f) => Padding(
-                    padding: const EdgeInsets.only(bottom: 18),
-                    child: _UpcomingEventCard(f),
+                child: const Icon(
+                  Icons.celebration_rounded,
+                  size: 18,
+                  color: AppTheme.warning,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      event != null ? '🎉 $event Mode' : 'Festival Mode',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    if (summary != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          summary,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (criticalCount > 0 || highCount > 0) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                if (criticalCount > 0)
+                  _UrgencyBadge(
+                    count: criticalCount,
+                    label: 'Need Now',
+                    color: AppTheme.error,
+                  ),
+                if (criticalCount > 0 && highCount > 0)
+                  const SizedBox(width: 8),
+                if (highCount > 0)
+                  _UrgencyBadge(
+                    count: highCount,
+                    label: 'Stock Up',
+                    color: AppTheme.warning,
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _UrgencyBadge extends StatelessWidget {
+  final int count;
+  final String label;
+  final Color color;
+  const _UrgencyBadge({required this.count, required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            color == AppTheme.error
+                ? Icons.priority_high_rounded
+                : Icons.trending_up_rounded,
+            size: 13,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '$count $label',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STOCK CHECK CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StockCheckCard extends StatelessWidget {
+  final Map<String, dynamic> card;
+  const _StockCheckCard(this.card);
+
+  static const _statusConfig = {
+    'GOOD': (
+      color: AppTheme.success,
+      icon: Icons.check_circle_rounded,
+      label: 'Good',
+    ),
+    'WATCH': (
+      color: AppTheme.warning,
+      icon: Icons.watch_later_rounded,
+      label: 'Watch',
+    ),
+    'LOW': (color: AppTheme.error, icon: Icons.warning_rounded, label: 'Low'),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final items = (card['items'] as List?) ?? [];
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primarySurface,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.inventory_2_outlined,
+                    size: 16,
+                    color: AppTheme.primary,
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Stock Health',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                ),
+                // Summary badges
+                _StatusCount(items: items, status: 'LOW'),
+                const SizedBox(width: 6),
+                _StatusCount(items: items, status: 'WATCH'),
               ],
+            ),
+          ),
+          const Divider(color: AppTheme.divider, height: 1),
+          // Item rows
+          ...items.map((item) => _StockItemRow(item as Map<String, dynamic>)),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
 
-              // ── What to expect next month ───────────────────────────
-              _ConversationalSectionLabel(
-                icon: Icons.analytics_outlined,
-                title: 'Sales Forecast',
-                subtitle: 'Next 30 days based on recent sales',
-              ),
-              const SizedBox(height: 14),
-              if (forecast == null)
-                const _InfoCard(
-                  icon: Icons.auto_graph_outlined,
-                  text: 'Pull down to generate your outlook.',
-                )
-              else
-                _HumanForecastCard(forecast),
-            ],
-          ],
+class _StatusCount extends StatelessWidget {
+  final List items;
+  final String status;
+  const _StatusCount({required this.items, required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final count = items
+        .where((i) => (i['status'] as String?)?.toUpperCase() == status)
+        .length;
+    if (count == 0) return const SizedBox.shrink();
+
+    final color = status == 'LOW' ? AppTheme.error : AppTheme.warning;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        '$count ${status.toLowerCase()}',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: color,
         ),
       ),
     );
   }
 }
 
-// ── Conversational Section Label ───────────────────────────────────────────────
-
-class _ConversationalSectionLabel extends StatelessWidget {
-  final IconData icon;
-  final String title, subtitle;
-  const _ConversationalSectionLabel({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
+class _StockItemRow extends StatelessWidget {
+  final Map<String, dynamic> item;
+  const _StockItemRow(this.item);
 
   @override
-  Widget build(BuildContext context) => Row(
-    crossAxisAlignment: CrossAxisAlignment.center,
-    children: [
-      Container(
-        padding: const EdgeInsets.all(7),
-        decoration: BoxDecoration(
-          color: AppTheme.primarySurface,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(icon, size: 15, color: AppTheme.primary),
-      ),
-      const SizedBox(width: 10),
-      Column(
+  Widget build(BuildContext context) {
+    final product = item['product'] as String? ?? '';
+    final status = (item['status'] as String? ?? 'GOOD').toUpperCase();
+    final reason = item['reason'] as String? ?? '';
+    final action = item['action'] as String? ?? '';
+
+    final cfg =
+        _StockCheckCard._statusConfig[status] ??
+        _StockCheckCard._statusConfig['GOOD']!;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: AppTheme.textPrimary,
-              fontWeight: FontWeight.w700,
-              fontSize: 16,
+          Icon(cfg.icon, size: 18, color: cfg.color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        product,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: cfg.color.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        cfg.label,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: cfg.color,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (reason.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      reason,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                if (action.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      '→ $action',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: cfg.color,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+              ],
             ),
-          ),
-          Text(
-            subtitle,
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
         ],
       ),
-    ],
-  );
+    );
+  }
 }
 
-// ── Empty State ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// PATTERN CARD
+// ─────────────────────────────────────────────────────────────────────────────
 
-class _EmptyInsightsState extends StatelessWidget {
-  const _EmptyInsightsState();
+class _PatternCard extends StatelessWidget {
+  final Map<String, dynamic> card;
+  const _PatternCard(this.card);
+
+  @override
+  Widget build(BuildContext context) {
+    final insight = card['insight'] as String? ?? '';
+    final action = card['action'] as String? ?? '';
+    if (insight.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: AppTheme.primarySurface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.trending_up_rounded,
+              size: 16,
+              color: AppTheme.primary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Trend',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  insight,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.textSecondary,
+                    height: 1.5,
+                  ),
+                ),
+                if (action.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primarySurface,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.lightbulb_outline_rounded,
+                          size: 13,
+                          color: AppTheme.primary,
+                        ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            action,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.primary,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EVENT CONTEXT CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _EventContextCard extends StatelessWidget {
+  final Map<String, dynamic> card;
+  const _EventContextCard(this.card);
+
+  static const _urgencyOrder = {'critical': 0, 'high': 1, 'moderate': 2};
+
+  @override
+  Widget build(BuildContext context) {
+    final event = card['event'] as String? ?? '';
+    final items = List<Map<String, dynamic>>.from(
+      (card['items'] as List?)?.map((e) => e as Map<String, dynamic>) ?? [],
+    );
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    // Sort by urgency: critical → high → moderate → rest
+    items.sort((a, b) {
+      final ua = _urgencyOrder[a['urgency']] ?? 3;
+      final ub = _urgencyOrder[b['urgency']] ?? 3;
+      return ua.compareTo(ub);
+    });
+
+    final hasCritical = items.any((i) => i['urgency'] == 'critical');
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: hasCritical
+              ? AppTheme.error.withOpacity(0.3)
+              : AppTheme.warning.withOpacity(0.25),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: hasCritical
+                    ? [
+                        AppTheme.error.withOpacity(0.1),
+                        AppTheme.warning.withOpacity(0.06),
+                      ]
+                    : [
+                        AppTheme.warning.withOpacity(0.1),
+                        AppTheme.primarySurface,
+                      ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(18),
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: hasCritical
+                        ? AppTheme.error.withOpacity(0.12)
+                        : AppTheme.warning.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    hasCritical
+                        ? Icons.local_fire_department_rounded
+                        : Icons.event_rounded,
+                    size: 16,
+                    color: hasCritical ? AppTheme.error : AppTheme.warning,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        event.isEmpty ? 'Festival Demand' : '$event — Stock Up',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(color: AppTheme.divider, height: 1),
+          // Item rows
+          ...items.map((item) => _EventItemRow(item)),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _EventItemRow extends StatelessWidget {
+  final Map<String, dynamic> item;
+  const _EventItemRow(this.item);
+
+  static const _urgencyConfig = {
+    'critical': (
+      color: AppTheme.error,
+      icon: Icons.priority_high_rounded,
+      label: '🔴 Order Now',
+      bgOpacity: 0.08,
+    ),
+    'high': (
+      color: AppTheme.warning,
+      icon: Icons.trending_up_rounded,
+      label: '🟠 Stock Up',
+      bgOpacity: 0.06,
+    ),
+    'moderate': (
+      color: AppTheme.primary,
+      icon: Icons.info_outline_rounded,
+      label: '🟡 Extra',
+      bgOpacity: 0.04,
+    ),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final product = item['product'] as String? ?? '';
+    final urgency = item['urgency'] as String? ?? 'moderate';
+    final demandNote = item['demand_note'] as String? ?? '';
+    final classification =
+        item['classification'] as String? ?? 'existing_product';
+    final action = item['action'] as String? ?? '';
+    final isOpportunity = classification == 'opportunity';
+
+    final cfg = _urgencyConfig[urgency] ?? _urgencyConfig['moderate']!;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(8, 6, 8, 2),
+      padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: cfg.color.withOpacity(cfg.bgOpacity),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(cfg.icon, size: 18, color: cfg.color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Product name + urgency badge
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        product,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: cfg.color.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        isOpportunity ? '✨ New' : cfg.label,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: cfg.color,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                // Demand note — the key new info
+                if (demandNote.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      demandNote,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: cfg.color,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                // Action
+                if (action.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      '→ $action',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // Add to order list button
+          Consumer<OrderListProvider>(
+            builder: (_, orders, __) {
+              final inList = orders.contains(product);
+              return GestureDetector(
+                onTap: inList
+                    ? null
+                    : () => orders.add(
+                        OrderItem(
+                          name: product,
+                          reason: '${item['event'] ?? 'Festival'} prep — $urgency',
+                          qty: urgency == 'critical' ? 30 : urgency == 'high' ? 20 : 10,
+                        ),
+                      ),
+                child: Container(
+                  margin: const EdgeInsets.only(left: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: inList
+                        ? AppTheme.success.withOpacity(0.1)
+                        : cfg.color.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: inList
+                          ? AppTheme.success.withOpacity(0.3)
+                          : cfg.color.withOpacity(0.25),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        inList ? Icons.check_rounded : Icons.add_rounded,
+                        size: 12,
+                        color: inList ? AppTheme.success : cfg.color,
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        inList ? 'Added' : 'Order',
+                        style: TextStyle(
+                          color: inList ? AppTheme.success : cfg.color,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INFO CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _GuidanceInfoCard extends StatelessWidget {
+  final Map<String, dynamic> card;
+  const _GuidanceInfoCard(this.card);
+
+  @override
+  Widget build(BuildContext context) {
+    final insight = card['insight'] as String? ?? '';
+    if (insight.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.info_outline_rounded,
+            size: 18,
+            color: AppTheme.textSecondary,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              insight,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppTheme.textSecondary,
+                height: 1.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPTY STATE
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -288,687 +1039,3 @@ class _EmptyInsightsState extends StatelessWidget {
     ),
   );
 }
-
-// ── Section Header (kept for compile compat — replaced by _ConversationalSectionLabel in build) ──
-// (removed)
-
-// ── Info Card ──────────────────────────────────────────────────────────────────
-
-class _InfoCard extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  const _InfoCard({required this.icon, required this.text});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(20),
-    decoration: BoxDecoration(
-      color: AppTheme.card,
-      borderRadius: BorderRadius.circular(16),
-    ),
-    child: Column(
-      children: [
-        Icon(icon, color: AppTheme.textSecondary, size: 36),
-        const SizedBox(height: 10),
-        Text(
-          text,
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-        ),
-      ],
-    ),
-  );
-}
-
-// ── Upcoming Event Card ────────────────────────────────────────────────────────
-/// Full-width card per event. Reads like a business advisor message, not a
-/// marketing calendar. Specific, warm, and ends with a clear action.
-
-class _UpcomingEventCard extends StatelessWidget {
-  final Map<String, dynamic> festival;
-  const _UpcomingEventCard(this.festival);
-
-  // Human-readable time (not just a number)
-  String _timeLabel(int days) {
-    if (days == 0) return 'Today!';
-    if (days == 1) return 'Tomorrow';
-    if (days <= 7) return 'In $days days';
-    if (days <= 14) return 'Next week';
-    return 'In $days days';
-  }
-
-  // Advisor-tone pitch: urgency + product-specific callout
-  String _pitch(String name, int days, List recs) {
-    final timeframe = days <= 2
-        ? 'Stock up immediately'
-        : days <= 7
-            ? 'You have a few days to prepare'
-            : 'Good time to get ahead of demand';
-    if (recs.isEmpty) {
-      return '$timeframe — ensure stock levels are ready before the festival.';
-    }
-    final top = recs
-        .take(2)
-        .map((r) => r['product'] as String? ?? '')
-        .where((p) => p.isNotEmpty)
-        .join(' and ');
-    return '$timeframe. Demand for $top typically rises during $name. Order now to avoid stockouts.';
-  }
-
-  int _boostK(List recs) => recs.isEmpty ? 0 : (recs.length.clamp(1, 5) * 4800 ~/ 1000);
-
-  @override
-  Widget build(BuildContext context) {
-    final name = festival['festival'] as String? ?? '';
-    final days = (festival['daysAway'] as num?)?.toInt() ?? 0;
-    final recs = (festival['recommendations'] as List?) ?? [];
-    final boostK = _boostK(recs);
-    final isUrgent = days <= 7;
-
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: AppTheme.card,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isUrgent
-              ? AppTheme.warning.withOpacity(0.35)
-              : AppTheme.primary.withOpacity(0.2),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Header strip ──────────────────────────────────────────
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  (isUrgent ? AppTheme.warning : AppTheme.primary)
-                      .withOpacity(0.12),
-                  AppTheme.primarySurface,
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(20),
-              ),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: (isUrgent ? AppTheme.warning : AppTheme.primary).withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.event_rounded,
-                    size: 24,
-                    color: isUrgent ? AppTheme.warning : AppTheme.primary,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: AppTheme.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isUrgent
-                              ? AppTheme.warning.withOpacity(0.15)
-                              : AppTheme.primary.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          _timeLabel(days),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isUrgent ? AppTheme.warning : AppTheme.primary,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // Estimated revenue
-                if (boostK > 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppTheme.success.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      '+₹${boostK}K est.',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.success,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-
-          // ── Human advisor pitch ───────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  margin: const EdgeInsets.only(top: 2),
-                  padding: const EdgeInsets.all(5),
-                  decoration: BoxDecoration(
-                    color: AppTheme.primarySurface,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.auto_awesome_rounded,
-                    color: AppTheme.primary,
-                    size: 12,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _pitch(name, days, recs),
-                    style: const TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 13,
-                      height: 1.55,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // ── Product list ──────────────────────────────────────────
-          if (recs.isNotEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
-              child: Text(
-                'What to stock up on:',
-                style: TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-            ...recs.take(4).toList().asMap().entries.map((e) {
-              return _ProductRecommendationRow(
-                e.value as Map<String, dynamic>,
-                isTopPick: e.key == 0,
-                festivalName: name,
-                daysAway: days,
-              );
-            }),
-          ],
-
-          // ── CTA button ────────────────────────────────────────────
-          if (recs.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-              child: Consumer<OrderListProvider>(
-                builder: (_, orders, __) {
-                  final allAdded = recs.every(
-                    (r) => orders.contains(r['product'] as String? ?? ''),
-                  );
-                  return SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            allAdded ? AppTheme.success : AppTheme.primary,
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size.fromHeight(48),
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      onPressed: allAdded
-                          ? null
-                          : () {
-                              for (final r in recs) {
-                                final product =
-                                    r['product'] as String? ?? '';
-                                if (product.isNotEmpty &&
-                                    !orders.contains(product)) {
-                                  orders.add(OrderItem(
-                                    name: product,
-                                    reason: days <= 3
-                                        ? '$name is almost here'
-                                        : '$name in $days days',
-                                    qty: 10,
-                                  ));
-                                }
-                              }
-                            },
-                      child: Text(
-                        allAdded
-                            ? '✓ All added to order list'
-                            : days <= 3
-                                ? 'Add all to order list →'
-                                : 'Add all to order list →',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Product Recommendation Row ─────────────────────────────────────────────────
-/// Top pick gets a highlighted treatment; rest are quieter.
-/// Connects to OrderListProvider so the user can add items directly.
-
-class _ProductRecommendationRow extends StatelessWidget {
-  final Map<String, dynamic> rec;
-  final bool isTopPick;
-  final String? festivalName;
-  final int? daysAway;
-  const _ProductRecommendationRow(
-    this.rec, {
-    this.isTopPick = false,
-    this.festivalName,
-    this.daysAway,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final pct = rec['percentIncrease'] as num? ?? 0;
-    final productName = rec['product'] as String? ?? '';
-    final reason = festivalName != null
-        ? (daysAway != null && daysAway! <= 3
-            ? '$festivalName is almost here'
-            : '$festivalName in ${daysAway ?? '?'} days')
-        : 'Festival demand';
-
-    return Consumer<OrderListProvider>(
-      builder: (_, orders, __) {
-        final inList = orders.contains(productName);
-        return Container(
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: isTopPick
-                ? AppTheme.primary.withOpacity(0.08)
-                : AppTheme.surface,
-            borderRadius: BorderRadius.circular(12),
-            border: isTopPick
-                ? Border.all(color: AppTheme.primary.withOpacity(0.25))
-                : null,
-          ),
-          child: Row(
-            children: [
-              if (isTopPick)
-                Container(
-                  margin: const EdgeInsets.only(right: 8),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppTheme.primary,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Text(
-                    'TOP',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.6,
-                    ),
-                  ),
-                ),
-              Expanded(
-                child: Text(
-                  productName,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight:
-                        isTopPick ? FontWeight.w700 : FontWeight.w500,
-                    color: AppTheme.textPrimary,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              if (pct > 0)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: AppTheme.success.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '↑$pct%',
-                    style: const TextStyle(
-                      color: AppTheme.success,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              const SizedBox(width: 8),
-              // Add to Order button
-              GestureDetector(
-                onTap: inList
-                    ? null
-                    : () => orders.add(OrderItem(
-                          name: productName,
-                          reason: reason,
-                          qty: 10,
-                        )),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: inList
-                        ? AppTheme.success.withOpacity(0.1)
-                        : AppTheme.primary.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: inList
-                          ? AppTheme.success.withOpacity(0.3)
-                          : AppTheme.primary.withOpacity(0.2),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        inList ? Icons.check_rounded : Icons.add_rounded,
-                        size: 12,
-                        color: inList ? AppTheme.success : AppTheme.primary,
-                      ),
-                      const SizedBox(width: 3),
-                      Text(
-                        inList ? 'Added' : 'Order',
-                        style: TextStyle(
-                          color:
-                              inList ? AppTheme.success : AppTheme.primary,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-// ── Human Forecast Card ────────────────────────────────────────────────────────
-/// No day-by-day bars. Just the headline, a week signal, peak/slow chips,
-/// and a single plain-language tip. Shop owners need "what to expect",
-/// not a data table.
-
-class _HumanForecastCard extends StatelessWidget {
-  final Map<String, dynamic> forecast;
-  const _HumanForecastCard(this.forecast);
-
-  @override
-  Widget build(BuildContext context) {
-    final pts = (forecast['forecast'] as List? ?? []);
-    if (pts.isEmpty) {
-      return const _InfoCard(
-        icon: Icons.auto_graph_outlined,
-        text: 'Forecast data is not available yet.',
-      );
-    }
-
-    // Weekly totals
-    double week1 = 0, week2 = 0;
-    for (int i = 0; i < pts.length && i < 7; i++) {
-      week1 += double.tryParse(pts[i]['predicted'].toString()) ?? 0;
-    }
-    for (int i = 7; i < pts.length && i < 14; i++) {
-      week2 += double.tryParse(pts[i]['predicted'].toString()) ?? 0;
-    }
-    final weekTrend = week1 > 0
-        ? (week2 > week1 * 1.05
-            ? 'Second week looks stronger'
-            : week2 < week1 * 0.95
-                ? 'Second week may be quieter'
-                : 'Steady pace expected')
-        : '';
-
-    // Peak and slow day
-    Map? peakDay, slowDay;
-    double peakVal = 0, slowVal = double.infinity;
-    for (final p in pts) {
-      final v = double.tryParse(p['predicted'].toString()) ?? 0;
-      if (v > peakVal) { peakVal = v; peakDay = p; }
-      if (v < slowVal) { slowVal = v; slowDay = p; }
-    }
-
-    final totalPredicted = pts.fold<double>(
-      0,
-      (sum, p) => sum + (double.tryParse(p['predicted'].toString()) ?? 0),
-    );
-
-    // Date shorthand helper
-    String shortDate(dynamic raw) {
-      final s = raw?.toString() ?? '';
-      return s.length >= 10 ? s.substring(5, 10) : s;
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppTheme.card,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // AI summary sentence in quotes
-          if (forecast['summary'] != null) ...[
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: AppTheme.primarySurface,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.auto_awesome_rounded,
-                    color: AppTheme.primary,
-                    size: 13,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '"${forecast['summary']}"',
-                    style: const TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 13,
-                      fontStyle: FontStyle.italic,
-                      height: 1.55,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(color: AppTheme.divider, height: 28),
-          ],
-
-          // Expected revenue headline
-          const Text(
-            'Expected this month',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            '₹${(totalPredicted / 1000).toStringAsFixed(1)}L',
-            style: const TextStyle(
-              color: AppTheme.textPrimary,
-              fontWeight: FontWeight.w800,
-              fontSize: 32,
-            ),
-          ),
-          if (weekTrend.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              weekTrend,
-              style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 12,
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 18),
-
-          // Peak / Slow chips side by side
-          Row(
-            children: [
-              if (peakDay != null)
-                Expanded(
-                  child: _ForecastSignalChip(
-                    icon: Icons.trending_up_rounded,
-                    label: 'Best day',
-                    value: shortDate(peakDay['date']),
-                    color: AppTheme.success,
-                  ),
-                ),
-              if (peakDay != null && slowDay != null) const SizedBox(width: 10),
-              if (slowDay != null)
-                Expanded(
-                  child: _ForecastSignalChip(
-                    icon: Icons.trending_down_rounded,
-                    label: 'Slower day',
-                    value: shortDate(slowDay['date']),
-                    color: AppTheme.textSecondary,
-                  ),
-                ),
-            ],
-          ),
-
-          const SizedBox(height: 14),
-
-          // Single actionable tip
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: AppTheme.surface,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(Icons.lightbulb_outline_rounded, size: 16, color: AppTheme.textSecondary),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    slowDay != null
-                        ? 'Consider running a small offer on your slower day to bring more customers in.'
-                        : 'Keep your popular items fully stocked to make the most of this month.',
-                    style: const TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 12,
-                      height: 1.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Forecast Signal Chip ───────────────────────────────────────────────────────
-
-class _ForecastSignalChip extends StatelessWidget {
-  final IconData icon;
-  final String label, value;
-  final Color color;
-  const _ForecastSignalChip({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: color.withOpacity(0.07),
-      borderRadius: BorderRadius.circular(12),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 18, color: color),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: const TextStyle(
-            color: AppTheme.textSecondary,
-            fontSize: 11,
-          ),
-        ),
-        const SizedBox(height: 1),
-        Text(
-          value,
-          style: TextStyle(
-            color: color,
-            fontWeight: FontWeight.w700,
-            fontSize: 15,
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-
