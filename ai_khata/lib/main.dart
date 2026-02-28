@@ -12,6 +12,7 @@ import 'features/bills/bills_screens.dart';
 import 'features/ledger/ledger_screen.dart';
 import 'features/insights/insights_screen.dart';
 import 'features/stocks/stock_screen.dart';
+import 'features/stocks/order_list_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,12 +25,23 @@ class AiKhataApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => AuthService()..loadFromPrefs(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthService()..loadFromPrefs()),
+        // OrderListProvider gets its storeId from AuthService so the list
+        // loads from the backend as soon as the user is authenticated.
+        ChangeNotifierProxyProvider<AuthService, OrderListProvider>(
+          create: (_) => OrderListProvider(),
+          update: (_, auth, previous) {
+            previous!.setStoreId(auth.storeId);
+            return previous;
+          },
+        ),
+      ],
       child: Consumer<AuthService>(
         builder: (_, auth, __) => MaterialApp.router(
           title: 'VyapaarAI',
-          theme: AppTheme.dark,
+          theme: AppTheme.light,
           debugShowCheckedModeBanner: false,
           routerConfig: _buildRouter(auth),
         ),
@@ -45,12 +57,15 @@ GoRouter _buildRouter(AuthService auth) => GoRouter(
     final onboarded = auth.onboardingComplete;
     final loc = state.matchedLocation;
 
-    if (!loggedIn && loc != AppConstants.routeLogin)
+    if (!loggedIn && loc != AppConstants.routeLogin) {
       return AppConstants.routeLogin;
-    if (loggedIn && !onboarded && !loc.startsWith('/onboarding'))
+    }
+    if (loggedIn && !onboarded && !loc.startsWith('/onboarding')) {
       return AppConstants.routeOnboardingType;
-    if (loggedIn && onboarded && loc == AppConstants.routeLogin)
+    }
+    if (loggedIn && onboarded && loc == AppConstants.routeLogin) {
       return AppConstants.routeDashboard;
+    }
     return null;
   },
   routes: [

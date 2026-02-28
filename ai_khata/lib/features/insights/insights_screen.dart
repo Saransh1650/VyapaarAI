@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../core/api_client.dart';
 import '../../core/theme.dart';
 import '../auth/auth_service.dart';
+import '../stocks/order_list_provider.dart';
 
 /// Smart Advice screen — reads from backend cache only. No AI is called from the app.
 /// The backend auto-refreshes insights every 24h or after 20 new ledger entries.
@@ -48,15 +49,9 @@ class _InsightsScreenState extends State<InsightsScreen> {
     if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
-      final auth = context.read<AuthService>();
-      await ApiClient.instance.dio.post(
-        '/ai/insights/refresh',
-        data: {'storeId': auth.storeId, 'storeType': auth.storeType},
-      );
-      await Future.delayed(const Duration(seconds: 35));
+      // Only re-fetch from cache — the GET endpoint triggers background
+      // refresh automatically when data is stale. Never call the AI directly.
       await _loadInsights();
-    } catch (_) {
-      if (mounted) await _loadInsights();
     } finally {
       if (mounted) setState(() => _refreshing = false);
     }
@@ -170,10 +165,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
               ),
 
             if (!hasAnyData) ...[
-              _EmptyInsightsState(
-                onRefresh: _onPullRefresh,
-                refreshing: _refreshing,
-              ),
+              const _EmptyInsightsState(),
             ] else ...[
               // ── Coming up for your shop ─────────────────────────────
               if (festivals.isNotEmpty) ...[
@@ -272,22 +264,16 @@ class _ConversationalSectionLabel extends StatelessWidget {
 // ── Empty State ────────────────────────────────────────────────────────────────
 
 class _EmptyInsightsState extends StatelessWidget {
-  final VoidCallback onRefresh;
-  final bool refreshing;
-  const _EmptyInsightsState({
-    required this.onRefresh,
-    required this.refreshing,
-  });
+  const _EmptyInsightsState();
 
   @override
   Widget build(BuildContext context) => Padding(
-
     padding: const EdgeInsets.symmetric(vertical: 40),
     child: Column(
       children: [
         Container(
           padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
+          decoration: const BoxDecoration(
             color: AppTheme.primarySurface,
             shape: BoxShape.circle,
           ),
@@ -299,20 +285,14 @@ class _EmptyInsightsState extends StatelessWidget {
         ),
         const SizedBox(height: 20),
         const Text(
-          'Your Smart Advice Is Loading',
+          'Smart Advice Is On Its Way',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
         const Text(
-          'AI is analysing your sales patterns.\nPull down to check after a minute.',
+          'Keep adding bills — advice refreshes\nautomatically once a day.',
           textAlign: TextAlign.center,
           style: TextStyle(color: AppTheme.textSecondary, height: 1.5),
-        ),
-        const SizedBox(height: 20),
-        FilledButton.icon(
-          onPressed: refreshing ? null : onRefresh,
-          icon: const Icon(Icons.refresh_rounded),
-          label: Text(refreshing ? 'Analysing…' : 'Generate Advice Now'),
         ),
       ],
     ),
@@ -584,38 +564,68 @@ class _UpcomingEventCard extends StatelessWidget {
               return _ProductRecommendationRow(
                 e.value as Map<String, dynamic>,
                 isTopPick: e.key == 0,
+                festivalName: name,
+                daysAway: days,
               );
             }),
           ],
 
           // ── CTA button ────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primary,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size.fromHeight(48),
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                onPressed: () {},
-                child: Text(
-                  days <= 3
-                      ? 'Order these now — don\'t wait →'
-                      : 'Start stocking up →',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
+          if (recs.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+              child: Consumer<OrderListProvider>(
+                builder: (_, orders, __) {
+                  final allAdded = recs.every(
+                    (r) => orders.contains(r['product'] as String? ?? ''),
+                  );
+                  return SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor:
+                            allAdded ? AppTheme.success : AppTheme.primary,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size.fromHeight(48),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onPressed: allAdded
+                          ? null
+                          : () {
+                              for (final r in recs) {
+                                final product =
+                                    r['product'] as String? ?? '';
+                                if (product.isNotEmpty &&
+                                    !orders.contains(product)) {
+                                  orders.add(OrderItem(
+                                    name: product,
+                                    reason: days <= 3
+                                        ? '$name is almost here'
+                                        : '$name in $days days',
+                                    qty: 10,
+                                  ));
+                                }
+                              }
+                            },
+                      child: Text(
+                        allAdded
+                            ? '✓ All added to order list'
+                            : days <= 3
+                                ? 'Add all to order list →'
+                                : 'Add all to order list →',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
-          ),
         ],
       ),
     );
@@ -624,87 +634,145 @@ class _UpcomingEventCard extends StatelessWidget {
 
 // ── Product Recommendation Row ─────────────────────────────────────────────────
 /// Top pick gets a highlighted treatment; rest are quieter.
+/// Connects to OrderListProvider so the user can add items directly.
 
 class _ProductRecommendationRow extends StatelessWidget {
   final Map<String, dynamic> rec;
   final bool isTopPick;
-  const _ProductRecommendationRow(this.rec, {this.isTopPick = false});
+  final String? festivalName;
+  final int? daysAway;
+  const _ProductRecommendationRow(
+    this.rec, {
+    this.isTopPick = false,
+    this.festivalName,
+    this.daysAway,
+  });
 
   @override
   Widget build(BuildContext context) {
     final pct = rec['percentIncrease'] as num? ?? 0;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: isTopPick
-            ? AppTheme.primary.withOpacity(0.08)
-            : AppTheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: isTopPick
-            ? Border.all(color: AppTheme.primary.withOpacity(0.25))
-            : null,
-      ),
-      child: Row(
-        children: [
-          if (isTopPick)
-            Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppTheme.primary,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Text(
-                'TOP',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.6,
-                ),
-              ),
-            ),
-          Expanded(
-            child: Text(
-              rec['product'] as String? ?? '',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight:
-                    isTopPick ? FontWeight.w700 : FontWeight.w500,
-                color: AppTheme.textPrimary,
-              ),
-            ),
+    final productName = rec['product'] as String? ?? '';
+    final reason = festivalName != null
+        ? (daysAway != null && daysAway! <= 3
+            ? '$festivalName is almost here'
+            : '$festivalName in ${daysAway ?? '?'} days')
+        : 'Festival demand';
+
+    return Consumer<OrderListProvider>(
+      builder: (_, orders, __) {
+        final inList = orders.contains(productName);
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: isTopPick
+                ? AppTheme.primary.withOpacity(0.08)
+                : AppTheme.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: isTopPick
+                ? Border.all(color: AppTheme.primary.withOpacity(0.25))
+                : null,
           ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: AppTheme.success.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.arrow_upward_rounded,
-                  color: AppTheme.success,
-                  size: 12,
-                ),
-                const SizedBox(width: 2),
-                Text(
-                  '$pct% more demand',
-                  style: const TextStyle(
-                    color: AppTheme.success,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
+          child: Row(
+            children: [
+              if (isTopPick)
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    'TOP',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.6,
+                    ),
                   ),
                 ),
-              ],
-            ),
+              Expanded(
+                child: Text(
+                  productName,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight:
+                        isTopPick ? FontWeight.w700 : FontWeight.w500,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              if (pct > 0)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppTheme.success.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '↑$pct%',
+                    style: const TextStyle(
+                      color: AppTheme.success,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              const SizedBox(width: 8),
+              // Add to Order button
+              GestureDetector(
+                onTap: inList
+                    ? null
+                    : () => orders.add(OrderItem(
+                          name: productName,
+                          reason: reason,
+                          qty: 10,
+                        )),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: inList
+                        ? AppTheme.success.withOpacity(0.1)
+                        : AppTheme.primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: inList
+                          ? AppTheme.success.withOpacity(0.3)
+                          : AppTheme.primary.withOpacity(0.2),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        inList ? Icons.check_rounded : Icons.add_rounded,
+                        size: 12,
+                        color: inList ? AppTheme.success : AppTheme.primary,
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        inList ? 'Added' : 'Order',
+                        style: TextStyle(
+                          color:
+                              inList ? AppTheme.success : AppTheme.primary,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -1037,7 +1105,15 @@ class _AlertCard extends StatelessWidget {
     final daysText = daysLeft != null
         ? (daysLeft <= 1 ? '⏰ Runs out tomorrow' : 'About $daysLeft days of stock left')
         : 'Check stock levels';
+    final productName = alert['product'] as String? ?? '';
+    final reorderQty = (alert['reorderQty'] as num?)?.toInt() ?? 5;
+    final orderReason = daysLeft != null
+        ? (daysLeft <= 1 ? 'Runs out tomorrow' : 'About $daysLeft days left')
+        : 'Running low';
 
+    return Consumer<OrderListProvider>(
+      builder: (_, orders, __) {
+        final inList = orders.contains(productName);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
@@ -1055,7 +1131,7 @@ class _AlertCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  alert['product'] ?? '',
+                  productName,
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 15,
@@ -1063,20 +1139,28 @@ class _AlertCard extends StatelessWidget {
                 ),
               ),
               GestureDetector(
-                onTap: () {},
+                onTap: inList
+                    ? null
+                    : () => orders.add(OrderItem(
+                          name: productName,
+                          reason: orderReason,
+                          qty: reorderQty,
+                        )),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.12),
+                    color: inList
+                        ? AppTheme.success.withOpacity(0.12)
+                        : color.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
-                    isHigh ? 'Order Now' : 'Plan Restock',
+                    inList ? '✓ In list' : (isHigh ? 'Order Now' : 'Plan Restock'),
                     style: TextStyle(
-                      color: color,
+                      color: inList ? AppTheme.success : color,
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),
@@ -1128,6 +1212,8 @@ class _AlertCard extends StatelessWidget {
           ],
         ],
       ),
+    );
+      },
     );
   }
 }
