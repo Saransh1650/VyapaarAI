@@ -111,10 +111,8 @@ class _InsightsScreenState extends State<InsightsScreen> {
 
     final festivals = (_insights?['festival'] as List?) ?? [];
     final forecast = _insights?['forecast'] as Map<String, dynamic>?;
-    final inventory = _insights?['inventory'] as Map<String, dynamic>?;
     final generatedAt = _insights?['generatedAt']?.toString();
-    final hasAnyData =
-        festivals.isNotEmpty || forecast != null || inventory != null;
+    final hasAnyData = festivals.isNotEmpty || forecast != null;
 
     return RefreshIndicator(
       color: AppTheme.primary,
@@ -170,10 +168,10 @@ class _InsightsScreenState extends State<InsightsScreen> {
               // ── Coming up for your shop ─────────────────────────────
               if (festivals.isNotEmpty) ...[
                 _ConversationalSectionLabel(
-                  emoji: '📅',
-                  title: 'Coming up for your shop',
+                  icon: Icons.event_outlined,
+                  title: 'Upcoming Events',
                   subtitle: festivals.length == 1
-                      ? 'One event nearby — good time to prepare'
+                      ? '1 event in the next 45 days'
                       : '${festivals.length} events coming up',
                 ),
                 const SizedBox(height: 14),
@@ -188,9 +186,9 @@ class _InsightsScreenState extends State<InsightsScreen> {
 
               // ── What to expect next month ───────────────────────────
               _ConversationalSectionLabel(
-                emoji: '🔮',
-                title: 'What to expect next month',
-                subtitle: 'Based on your past sales',
+                icon: Icons.analytics_outlined,
+                title: 'Sales Forecast',
+                subtitle: 'Next 30 days based on recent sales',
               ),
               const SizedBox(height: 14),
               if (forecast == null)
@@ -200,22 +198,6 @@ class _InsightsScreenState extends State<InsightsScreen> {
                 )
               else
                 _HumanForecastCard(forecast),
-              const SizedBox(height: 28),
-
-              // ── Stock to sort out ───────────────────────────────────
-              _ConversationalSectionLabel(
-                emoji: '📦',
-                title: 'Stock to sort out',
-                subtitle: 'Items that need ordering soon',
-              ),
-              const SizedBox(height: 14),
-              if (inventory == null)
-                const _InfoCard(
-                  icon: Icons.check_circle_outline_rounded,
-                  text: 'No inventory data available yet.',
-                )
-              else
-                _InventoryHealthSummary(inventory: inventory),
             ],
           ],
         ),
@@ -227,9 +209,10 @@ class _InsightsScreenState extends State<InsightsScreen> {
 // ── Conversational Section Label ───────────────────────────────────────────────
 
 class _ConversationalSectionLabel extends StatelessWidget {
-  final String emoji, title, subtitle;
+  final IconData icon;
+  final String title, subtitle;
   const _ConversationalSectionLabel({
-    required this.emoji,
+    required this.icon,
     required this.title,
     required this.subtitle,
   });
@@ -238,7 +221,14 @@ class _ConversationalSectionLabel extends StatelessWidget {
   Widget build(BuildContext context) => Row(
     crossAxisAlignment: CrossAxisAlignment.center,
     children: [
-      Text(emoji, style: const TextStyle(fontSize: 20)),
+      Container(
+        padding: const EdgeInsets.all(7),
+        decoration: BoxDecoration(
+          color: AppTheme.primarySurface,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(icon, size: 15, color: AppTheme.primary),
+      ),
       const SizedBox(width: 10),
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -339,23 +329,6 @@ class _UpcomingEventCard extends StatelessWidget {
   final Map<String, dynamic> festival;
   const _UpcomingEventCard(this.festival);
 
-  // Event-specific emoji so the card feels personal, not generic
-  String get _emoji {
-    final name = (festival['festival'] as String? ?? '').toLowerCase();
-    if (name.contains('holi')) return '🌈';
-    if (name.contains('diwali') || name.contains('deepawali')) return '🪔';
-    if (name.contains('eid')) return '🌙';
-    if (name.contains('christmas')) return '🎄';
-    if (name.contains('navratri')) return '💃';
-    if (name.contains('ganesh') || name.contains('ganapati')) return '🐘';
-    if (name.contains('puja')) return '🌸';
-    if (name.contains('raksha') || name.contains('rakhi')) return '🧡';
-    if (name.contains('janmashtami') || name.contains('krishna')) return '🦚';
-    if (name.contains('new year')) return '🎆';
-    if (name.contains('independence') || name.contains('republic')) return '🇮🇳';
-    return '🎉';
-  }
-
   // Human-readable time (not just a number)
   String _timeLabel(int days) {
     if (days == 0) return 'Today!';
@@ -367,21 +340,20 @@ class _UpcomingEventCard extends StatelessWidget {
 
   // Advisor-tone pitch: urgency + product-specific callout
   String _pitch(String name, int days, List recs) {
-    final urgency = days <= 2
-        ? 'It\'s almost here'
+    final timeframe = days <= 2
+        ? 'Stock up immediately'
         : days <= 7
-            ? 'You still have a few days to prepare'
-            : 'You have a good window to stock up';
+            ? 'You have a few days to prepare'
+            : 'Good time to get ahead of demand';
     if (recs.isEmpty) {
-      return '$urgency — make sure you\'re ready before the rush starts.';
+      return '$timeframe — ensure stock levels are ready before the festival.';
     }
     final top = recs
         .take(2)
         .map((r) => r['product'] as String? ?? '')
         .where((p) => p.isNotEmpty)
         .join(' and ');
-    return '$urgency. Customers will be looking for things like $top. '
-        'Stock up now and you won\'t miss the sales.';
+    return '$timeframe. Demand for $top typically rises during $name. Order now to avoid stockouts.';
   }
 
   int _boostK(List recs) => recs.isEmpty ? 0 : (recs.length.clamp(1, 5) * 4800 ~/ 1000);
@@ -429,7 +401,18 @@ class _UpcomingEventCard extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_emoji, style: const TextStyle(fontSize: 36)),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: (isUrgent ? AppTheme.warning : AppTheme.primary).withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.event_rounded,
+                    size: 24,
+                    color: isUrgent ? AppTheme.warning : AppTheme.primary,
+                  ),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -467,46 +450,24 @@ class _UpcomingEventCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                // Potential earnings badge
+                // Estimated revenue
                 if (boostK > 0)
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
+                      horizontal: 10,
+                      vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppTheme.success.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: AppTheme.success.withOpacity(0.25),
-                      ),
+                      color: AppTheme.success.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        const Text(
-                          'Could earn',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: AppTheme.textSecondary,
-                          ),
-                        ),
-                        Text(
-                          '+₹${boostK}K',
-                          style: const TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w800,
-                            color: AppTheme.success,
-                          ),
-                        ),
-                        const Text(
-                          'extra',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: AppTheme.textSecondary,
-                          ),
-                        ),
-                      ],
+                    child: Text(
+                      '+₹${boostK}K est.',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.success,
+                      ),
                     ),
                   ),
               ],
@@ -909,7 +870,7 @@ class _HumanForecastCard extends StatelessWidget {
               if (peakDay != null)
                 Expanded(
                   child: _ForecastSignalChip(
-                    emoji: '📈',
+                    icon: Icons.trending_up_rounded,
                     label: 'Best day',
                     value: shortDate(peakDay['date']),
                     color: AppTheme.success,
@@ -919,7 +880,7 @@ class _HumanForecastCard extends StatelessWidget {
               if (slowDay != null)
                 Expanded(
                   child: _ForecastSignalChip(
-                    emoji: '📉',
+                    icon: Icons.trending_down_rounded,
                     label: 'Slower day',
                     value: shortDate(slowDay['date']),
                     color: AppTheme.textSecondary,
@@ -941,7 +902,7 @@ class _HumanForecastCard extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('💡', style: TextStyle(fontSize: 16)),
+                const Icon(Icons.lightbulb_outline_rounded, size: 16, color: AppTheme.textSecondary),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -967,10 +928,11 @@ class _HumanForecastCard extends StatelessWidget {
 // ── Forecast Signal Chip ───────────────────────────────────────────────────────
 
 class _ForecastSignalChip extends StatelessWidget {
-  final String emoji, label, value;
+  final IconData icon;
+  final String label, value;
   final Color color;
   const _ForecastSignalChip({
-    required this.emoji,
+    required this.icon,
     required this.label,
     required this.value,
     required this.color,
@@ -986,7 +948,7 @@ class _ForecastSignalChip extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(emoji, style: const TextStyle(fontSize: 18)),
+        Icon(icon, size: 18, color: color),
         const SizedBox(height: 4),
         Text(
           label,
@@ -1009,211 +971,4 @@ class _ForecastSignalChip extends StatelessWidget {
   );
 }
 
-// ── Inventory Health Summary ───────────────────────────────────────────────────
 
-class _InventoryHealthSummary extends StatelessWidget {
-  final Map<String, dynamic> inventory;
-  const _InventoryHealthSummary({required this.inventory});
-
-  @override
-  Widget build(BuildContext context) {
-    final alerts = (inventory['alerts'] as List?) ?? [];
-    final urgent = alerts.where((a) => a['urgency'] == 'high').length;
-    final soon = alerts.where((a) => a['urgency'] == 'medium').length;
-    final isGood = urgent == 0 && soon == 0;
-
-    return Column(
-      children: [
-        // Health banner
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: isGood
-
-                ? AppTheme.success.withOpacity(0.1)
-                : AppTheme.error.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isGood
-                  ? AppTheme.success.withOpacity(0.3)
-                  : AppTheme.error.withOpacity(0.3),
-            ),
-          ),
-          child: Row(
-            children: [
-              Text(isGood ? '✅' : '⚠️', style: const TextStyle(fontSize: 28)),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isGood
-                          ? 'All your stock looks healthy'
-                          : 'Some items need ordering soon',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                        color: isGood ? AppTheme.success : AppTheme.error,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      isGood
-                          ? 'No action needed right now.'
-                          : '${urgent > 0 ? '$urgent running out fast' : ''}${urgent > 0 && soon > 0 ? ' · ' : ''}${soon > 0 ? '$soon getting low' : ''}',
-                      style: const TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // List of alerts (if any)
-        if (alerts.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          ...alerts.map((a) => _AlertCard(a)),
-        ],
-      ],
-    );
-  }
-}
-
-// ── Alert Card ─────────────────────────────────────────────────────────────────
-
-class _AlertCard extends StatelessWidget {
-  final Map<String, dynamic> alert;
-  const _AlertCard(this.alert);
-
-  Color _urgencyColor(String? u) => switch (u) {
-    'high' => AppTheme.error,
-    'medium' => AppTheme.warning,
-    _ => AppTheme.success,
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final color = _urgencyColor(alert['urgency']);
-    final isHigh = alert['urgency'] == 'high';
-    final daysLeft = alert['estimatedDaysLeft'];
-    final daysText = daysLeft != null
-        ? (daysLeft <= 1 ? '⏰ Runs out tomorrow' : 'About $daysLeft days of stock left')
-        : 'Check stock levels';
-    final productName = alert['product'] as String? ?? '';
-    final reorderQty = (alert['reorderQty'] as num?)?.toInt() ?? 5;
-    final orderReason = daysLeft != null
-        ? (daysLeft <= 1 ? 'Runs out tomorrow' : 'About $daysLeft days left')
-        : 'Running low';
-
-    return Consumer<OrderListProvider>(
-      builder: (_, orders, __) {
-        final inList = orders.contains(productName);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border(left: BorderSide(color: color, width: 3.5)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(isHigh ? '🔴' : '🟡', style: const TextStyle(fontSize: 16)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  productName,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                  ),
-                ),
-              ),
-              GestureDetector(
-                onTap: inList
-                    ? null
-                    : () => orders.add(OrderItem(
-                          name: productName,
-                          reason: orderReason,
-                          qty: reorderQty,
-                        )),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: inList
-                        ? AppTheme.success.withOpacity(0.12)
-                        : color.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    inList ? '✓ In list' : (isHigh ? 'Order Now' : 'Plan Restock'),
-                    style: TextStyle(
-                      color: inList ? AppTheme.success : color,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          Text(daysText, style: TextStyle(color: color, fontSize: 12)),
-          if (alert['reorderQty'] != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              'Order about ${alert['reorderQty']} units to be safe',
-              style: const TextStyle(
-                color: AppTheme.primary,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-          if (alert['recommendation'] != null) ...[
-            const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppTheme.surface,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('💡', style: TextStyle(fontSize: 13)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      alert['recommendation'],
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.textSecondary,
-                        height: 1.45,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-      },
-    );
-  }
-}

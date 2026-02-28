@@ -351,18 +351,43 @@ class _StockScreenState extends State<StockScreen>
   Future<void> _markAllOrdered(OrderListProvider provider) async {
     final items = List<OrderItem>.from(provider.items);
     bool anyUpdated = false;
+    final auth = context.read<AuthService>();
     for (final order in items) {
       final stockItem = _items.firstWhere(
         (s) => (s['product_name'] as String?)?.toLowerCase() == order.name.toLowerCase(),
         orElse: () => null,
       );
       if (stockItem != null) {
+        // Existing item — add ordered qty on top of current stock
         final currentQty = double.tryParse(stockItem['quantity'].toString()) ?? 0;
-        await _updateQty(stockItem, currentQty + order.qty);
-        anyUpdated = true;
+        try {
+          await ApiClient.instance.dio.put(
+            '/stocks/${stockItem['id']}',
+            data: {
+              'storeId': auth.storeId,
+              'productName': stockItem['product_name'],
+              'quantity': currentQty + order.qty,
+              'unit': stockItem['unit'] ?? order.unit,
+              'costPrice': stockItem['cost_price'],
+            },
+          );
+          anyUpdated = true;
+        } catch (_) {}
+      } else {
+        // New item — create a stock entry with the ordered qty
+        try {
+          await ApiClient.instance.dio.post('/stocks', data: {
+            'storeId': auth.storeId,
+            'productName': order.name,
+            'quantity': order.qty.toDouble(),
+            'unit': order.unit,
+          });
+          anyUpdated = true;
+        } catch (_) {}
       }
     }
     await provider.markAllOrdered();
+    await _loadStock();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

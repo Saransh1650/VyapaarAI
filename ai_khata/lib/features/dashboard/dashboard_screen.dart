@@ -132,7 +132,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           suggestions.add({
             'type': 'festival',
             'urgency': 'opportunity',
-            'title': '${f['festival']} is in ${f['daysAway']} days 🎉',
+            'title': '${f['festival']} — ${f['daysAway']} days away',
             'body': 'Customers will buy more. Stock up now to avoid missing out.',
             'cta': 'See Plan →',
             'ctaRoute': '/dashboard/advice',
@@ -340,7 +340,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    '$greeting, ${auth.userName ?? 'there'} 👋',
+                    '$greeting, ${auth.userName ?? 'there'}',
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
@@ -469,7 +469,7 @@ class _UrgentBanner extends StatelessWidget {
                 color: AppTheme.error.withOpacity(0.18),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Text('🚨', style: TextStyle(fontSize: 18)),
+              child: const Icon(Icons.warning_rounded, color: AppTheme.error, size: 20),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -668,13 +668,6 @@ class _ActionCenterCardState extends State<_ActionCenterCard> {
     _ => AppTheme.textSecondary,
   };
 
-  String _urgencyEmoji(String? u) => switch (u) {
-    'high' => '🔴',
-    'medium' => '🟡',
-    'opportunity' => '💰',
-    _ => '⚪',
-  };
-
   @override
   void dispose() {
     _ctrl.dispose();
@@ -714,7 +707,7 @@ class _ActionCenterCardState extends State<_ActionCenterCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Your AI Assistant',
+                      'Today\'s Priorities',
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 15,
@@ -722,7 +715,7 @@ class _ActionCenterCardState extends State<_ActionCenterCard> {
                       ),
                     ),
                     Text(
-                      '${widget.suggestions.length} action${widget.suggestions.length > 1 ? 's' : ''} for today',
+                      '${widget.suggestions.length} item${widget.suggestions.length > 1 ? 's' : ''}',
                       style: const TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 11,
@@ -759,9 +752,14 @@ class _ActionCenterCardState extends State<_ActionCenterCard> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        _urgencyEmoji(s['urgency']),
-                        style: const TextStyle(fontSize: 20),
+                      Container(
+                        width: 8,
+                        height: 8,
+                        margin: const EdgeInsets.only(top: 5),
+                        decoration: BoxDecoration(
+                          color: _urgencyColor(s['urgency']),
+                          shape: BoxShape.circle,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -866,8 +864,8 @@ class _TodayPerformanceCard extends StatelessWidget {
     if (yesterdayTotal <= 0) return 'No sales yesterday to compare';
     final diff = todayTotal - yesterdayTotal;
     final pct = (diff / yesterdayTotal * 100).abs().toStringAsFixed(0);
-    if (diff > 0) return '📈 Up $pct% from yesterday';
-    if (diff < 0) return '📉 Down $pct% from yesterday';
+    if (diff > 0) return '↑ $pct% from yesterday';
+    if (diff < 0) return '↓ $pct% from yesterday';
     return 'Same as yesterday';
   }
 
@@ -1018,7 +1016,7 @@ class _QuickHealthRow extends StatelessWidget {
     children: [
       Expanded(
         child: _HealthChip(
-          emoji: '⭐',
+          icon: Icons.star_rounded,
           label: 'Best Seller',
           value: loading ? '...' : topProduct,
           color: AppTheme.warning,
@@ -1028,7 +1026,7 @@ class _QuickHealthRow extends StatelessWidget {
         const SizedBox(width: 10),
         Expanded(
           child: _HealthChip(
-            emoji: '⚠️',
+            icon: Icons.warning_amber_rounded,
             label: 'Low Stock',
             value: '$urgentCount item${urgentCount > 1 ? 's' : ''}',
             color: AppTheme.error,
@@ -1037,9 +1035,9 @@ class _QuickHealthRow extends StatelessWidget {
       ],
       if (urgentCount == 0) ...[
         const SizedBox(width: 10),
-        const Expanded(
+        Expanded(
           child: _HealthChip(
-            emoji: '✅',
+            icon: Icons.check_circle_outline_rounded,
             label: 'Stock Status',
             value: 'All good',
             color: AppTheme.success,
@@ -1051,10 +1049,11 @@ class _QuickHealthRow extends StatelessWidget {
 }
 
 class _HealthChip extends StatelessWidget {
-  final String emoji, label, value;
+  final IconData icon;
+  final String label, value;
   final Color color;
   const _HealthChip({
-    required this.emoji,
+    required this.icon,
     required this.label,
     required this.value,
     required this.color,
@@ -1070,7 +1069,7 @@ class _HealthChip extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(emoji, style: const TextStyle(fontSize: 16)),
+        Icon(icon, size: 18, color: color),
         const SizedBox(height: 6),
         Text(
           label,

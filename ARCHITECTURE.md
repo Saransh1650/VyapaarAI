@@ -98,19 +98,22 @@ which festivals are coming — and acts on it with one tap.
 
 ### Colour Palette
 
+The app uses a **light theme** (`AppTheme.light`). Accessed via `theme: AppTheme.light` in `MaterialApp`.
+
 ```dart
 // lib/core/theme.dart — AppTheme static consts
-primary         = #EF6C00  // Saffron orange — all CTAs, icons, active states
-primarySurface  = #EF6C00 @ 10% opacity  // Background tint behind primary elements
+primary         = #F57C00  // Saffron orange — all CTAs, active states, icons
+primarySurface  = #FFF3E0  // Warm white-orange tint behind primary elements
 
-background      = #111111  // App background (darkest)
-surface         = #1E1E1E  // Input fields, secondary containers
-card            = #242424  // All cards and bottom sheets
-divider         = #2A2A2A  // Hairline separators
+background      = #FFFFFF  // App background
+surface         = #F5F5F5  // Input fields, secondary containers
+card            = #FFFFFF  // All cards and bottom sheets
+cardElevated    = #F0F0F0  // Slightly elevated card variant
+divider         = #E8E8E8  // Hairline separators
 
-textPrimary     = #F5F5F5  // Main body text, headings
-textSecondary   = #9E9E9E  // Supporting text, labels
-textHint        = #616161  // Placeholder, disabled text
+textPrimary     = #1A1A1A  // Main body text, headings
+textSecondary   = #757575  // Supporting text, labels
+textHint        = #BDBDBD  // Placeholder, disabled text
 
 success         = #2ECC71  // Income, healthy stock, done states
 warning         = #F4B400  // Low stock, medium urgency
@@ -134,6 +137,25 @@ All text uses **Inter**. Weights used in practice:
 - **Bottom sheets** use `AppTheme.card` background, top handle bar, keyboard-aware padding
 - **Buttons:** `ElevatedButton` for primary actions (saffron fill), `OutlinedButton` for secondary, `FilledButton` for confirmations
 - **Status chips** always use `color.withOpacity(0.1)` background + `color` text (never solid fill)
+
+### Emoji & Icon Policy
+
+Emojis are **not used** in the UI. All status indicators and decorative markers use Material `Icon` widgets with semantic colour:
+
+| Purpose             | Widget                            | Icon                                 |
+| ------------------- | --------------------------------- | ------------------------------------ |
+| Urgency — high      | `Icon` + `AppTheme.error`         | `Icons.warning_rounded`              |
+| Urgency — medium    | Coloured dot `Container`          | `BoxShape.circle`                    |
+| Best seller         | `Icon` + `AppTheme.warning`       | `Icons.star_rounded`                 |
+| Low stock           | `Icon` + `AppTheme.warning`       | `Icons.warning_amber_rounded`        |
+| Healthy stock       | `Icon` + `AppTheme.success`       | `Icons.check_circle_outline_rounded` |
+| Forecast up         | `Icon` + `AppTheme.success`       | `Icons.trending_up_rounded`          |
+| Forecast down       | `Icon` + `AppTheme.textSecondary` | `Icons.trending_down_rounded`        |
+| Tip / insight       | `Icon` + `AppTheme.textSecondary` | `Icons.lightbulb_outline_rounded`    |
+| Event / festival    | `Icon` + `AppTheme.primary`       | `Icons.event_rounded`                |
+| Section — events    | `Icon`                            | `Icons.event_outlined`               |
+| Section — forecast  | `Icon`                            | `Icons.analytics_outlined`           |
+| Section — inventory | `Icon`                            | `Icons.inventory_2_outlined`         |
 
 ---
 
