@@ -18,6 +18,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
   Map<String, dynamic>? _guidance;
   bool _loading = false;
   bool _refreshing = false;
+  bool _forceRefreshing = false;
   String? _error;
   String? _generatedAt;
 
@@ -61,6 +62,29 @@ class _InsightsScreenState extends State<InsightsScreen> {
       await _loadInsights();
     } finally {
       if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  Future<void> _forceRefresh() async {
+    if (_forceRefreshing) return;
+    setState(() => _forceRefreshing = true);
+    try {
+      final auth = context.read<AuthService>();
+      await ApiClient.instance.dio.post(
+        '/ai/insights/force-refresh',
+        queryParameters: {'storeId': auth.storeId, 'storeType': auth.storeType},
+      );
+      // Wait for the worker to finish generating
+      await Future.delayed(const Duration(seconds: 5));
+      await _loadInsights();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Force refresh failed')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _forceRefreshing = false);
     }
   }
 
@@ -118,7 +142,7 @@ class _InsightsScreenState extends State<InsightsScreen> {
 
     final mode = _guidance?['mode'] as String? ?? 'NORMAL';
     final cards = (_guidance?['guidance'] as List?) ?? [];
-    final isEvent = mode == 'EVENT';
+    final isEvent = mode == 'EVENT' || mode == 'EXPERIENCE_EVENT';
     final hasData = cards.isNotEmpty;
 
     return RefreshIndicator(
@@ -130,6 +154,74 @@ class _InsightsScreenState extends State<InsightsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── DEV: Force refresh button ─────────────────────────
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppTheme.error.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'DEV',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.error,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _forceRefreshing
+                      ? const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                                color: AppTheme.error,
+                              ),
+                            ),
+                            SizedBox(width: 6),
+                            Text(
+                              'Regenerating AI insights…',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.error,
+                              ),
+                            ),
+                          ],
+                        )
+                      : OutlinedButton.icon(
+                          onPressed: _forceRefresh,
+                          icon: const Icon(Icons.bolt_rounded, size: 14),
+                          label: const Text('Force Regenerate'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.error,
+                            side: const BorderSide(color: AppTheme.error),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                            textStyle: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                ],
+              ),
+            ),
+
             // ── Updated timestamp ──────────────────────────────────
             if (_generatedAt != null)
               Padding(
@@ -196,12 +288,54 @@ class _InsightsScreenState extends State<InsightsScreen> {
       case 'pattern':
         return _PatternCard(card);
       case 'event_context':
-        return _EventContextCard(card);
+      case 'festival_preparation':
+      case 'festival_experience':
+        return _EventContextCard(_normalizeEventCard(card));
       case 'info':
         return _GuidanceInfoCard(card);
+      case 'strength_amplification':
+        return _StrengthAmplificationCard(card);
+      case 'sales_expansion':
+        return _SalesExpansionCard(card);
+      case 'momentum_pattern':
+        return _MomentumPatternCard(card);
+      case 'shop_intelligence':
+        return _ShopIntelligenceCard(card);
       default:
         return const SizedBox.shrink();
     }
+  }
+
+  /// Normalises experience-engine festival cards to the shape
+  /// that [_EventContextCard] expects (demand_note, action, classification).
+  Map<String, dynamic> _normalizeEventCard(Map<String, dynamic> card) {
+    final type = card['type'] as String? ?? '';
+    if (type == 'event_context') return card;
+
+    final rawItems = (card['items'] as List?) ?? [];
+    final normalized = rawItems.map((item) {
+      final it = Map<String, dynamic>.from(item as Map);
+      // festival_preparation uses 'reason' instead of 'demand_note'
+      if (!it.containsKey('demand_note')) {
+        it['demand_note'] = it['reason'] ?? it['demandNote'] ?? '';
+      }
+      // Normalise camelCase demandNote from festival_experience
+      if (!it.containsKey('demand_note') || (it['demand_note'] as String).isEmpty) {
+        it['demand_note'] = it['demandNote'] ?? '';
+      }
+      // Normalise classification
+      final cls = it['classification'] as String? ?? '';
+      if (cls != 'opportunity') it['classification'] = 'existing_product';
+      // Ensure action exists
+      it['action'] ??= '';
+      return it;
+    }).toList();
+
+    return {
+      ...card,
+      'type': 'event_context',
+      'items': normalized,
+    };
   }
 }
 
@@ -215,7 +349,12 @@ class _EventModeBanner extends StatelessWidget {
 
   Map<String, dynamic>? _eventCard() {
     for (final c in cards) {
-      if (c is Map && c['type'] == 'event_context') return c as Map<String, dynamic>;
+      if (c is Map &&
+          (c['type'] == 'event_context' ||
+           c['type'] == 'festival_preparation' ||
+           c['type'] == 'festival_experience')) {
+        return c as Map<String, dynamic>;
+      }
     }
     return null;
   }
@@ -377,12 +516,27 @@ class _StockCheckCard extends StatelessWidget {
       icon: Icons.check_circle_rounded,
       label: 'Good',
     ),
+    'EXCELLENT': (
+      color: AppTheme.success,
+      icon: Icons.verified_rounded,
+      label: 'Excellent',
+    ),
     'WATCH': (
       color: AppTheme.warning,
       icon: Icons.watch_later_rounded,
       label: 'Watch',
     ),
     'LOW': (color: AppTheme.error, icon: Icons.warning_rounded, label: 'Low'),
+    'PRIORITY': (
+      color: AppTheme.error,
+      icon: Icons.priority_high_rounded,
+      label: 'Priority',
+    ),
+    'MISSING': (
+      color: AppTheme.error,
+      icon: Icons.remove_shopping_cart_rounded,
+      label: 'Missing',
+    ),
   };
 
   @override
@@ -994,6 +1148,624 @@ class _GuidanceInfoCard extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STRENGTH AMPLIFICATION CARD  (experience engine)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StrengthAmplificationCard extends StatelessWidget {
+  final Map<String, dynamic> card;
+  const _StrengthAmplificationCard(this.card);
+
+  @override
+  Widget build(BuildContext context) {
+    final insight = card['insight'] as String? ?? '';
+    final items = (card['items'] as List?) ?? [];
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: AppTheme.success.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.workspace_premium_rounded,
+                    size: 16,
+                    color: AppTheme.success,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Your Strengths',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppTheme.success.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${items.length} top',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.success,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (insight.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: Text(
+                insight,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          const Divider(color: AppTheme.divider, height: 1),
+          ...items.map((item) {
+            final it = item as Map<String, dynamic>;
+            final product = it['product'] as String? ?? '';
+            final reason = it['reason'] as String? ?? '';
+            final strength = double.tryParse(it['memoryStrength']?.toString() ?? '0') ?? 0.0;
+            final pct = (strength * 100).round();
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.star_rounded, size: 16, color: AppTheme.success),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                product,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              ),
+                            ),
+                            if (pct > 0)
+                              Text(
+                                '$pct% match',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppTheme.success,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                          ],
+                        ),
+                        if (reason.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              reason,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.textSecondary,
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SALES EXPANSION CARD  (experience engine)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SalesExpansionCard extends StatelessWidget {
+  final Map<String, dynamic> card;
+  const _SalesExpansionCard(this.card);
+
+  @override
+  Widget build(BuildContext context) {
+    final insight = card['insight'] as String? ?? '';
+    final crossSell = (card['crossSell'] as List?) ?? [];
+    final missingItems = (card['missingItems'] as List?) ?? [];
+    if (crossSell.isEmpty && missingItems.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primarySurface,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.compare_arrows_rounded,
+                    size: 16,
+                    color: AppTheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Sell More Together',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (insight.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: Text(
+                insight,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          if (crossSell.isNotEmpty) ...[
+            const Divider(color: AppTheme.divider, height: 1),
+            ...crossSell.map((pair) {
+              final p = pair as Map<String, dynamic>;
+              final trigger = p['trigger'] as String? ?? '';
+              final suggest = p['suggest'] as String? ?? '';
+              final action = p['action'] as String? ?? '';
+              final strength = double.tryParse(p['strength']?.toString() ?? '0') ?? 0.0;
+              final pct = (strength * 100).round();
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: AppTheme.surface,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              trigger,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: AppTheme.textPrimary,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Column(
+                            children: [
+                              const Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.primary),
+                              if (pct > 0)
+                                Text(
+                                  '$pct%',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    color: AppTheme.primary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primarySurface,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
+                            ),
+                            child: Text(
+                              suggest,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: AppTheme.primary,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (action.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          '→ $action',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textSecondary,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            }),
+          ],
+          if (missingItems.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+              child: Text(
+                'Opportunity Items',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.primary.withOpacity(0.8),
+                ),
+              ),
+            ),
+            ...missingItems.map((item) {
+              final it = item as Map<String, dynamic>;
+              final product = it['product'] as String? ?? it.toString();
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+                child: Row(
+                  children: [
+                    const Icon(Icons.add_circle_outline_rounded, size: 14, color: AppTheme.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        product,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+          const SizedBox(height: 10),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MOMENTUM PATTERN CARD  (experience engine)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MomentumPatternCard extends StatelessWidget {
+  final Map<String, dynamic> card;
+  const _MomentumPatternCard(this.card);
+
+  static const _trendConfig = {
+    'rising': (icon: Icons.trending_up_rounded, color: AppTheme.success, label: '↑ Rising'),
+    'slowing': (icon: Icons.trending_down_rounded, color: AppTheme.error, label: '↓ Slowing'),
+    'new': (icon: Icons.fiber_new_rounded, color: AppTheme.primary, label: '✦ New'),
+    'stable': (icon: Icons.trending_flat_rounded, color: AppTheme.textSecondary, label: '→ Stable'),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final insight = card['insight'] as String? ?? '';
+    final action = card['action'] as String? ?? '';
+    final products = (card['products'] as List?) ?? [];
+    if (insight.isEmpty && products.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  color: AppTheme.primarySurface,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.insights_rounded,
+                  size: 16,
+                  color: AppTheme.primary,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                'Momentum',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          if (insight.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              insight,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppTheme.textSecondary,
+                height: 1.5,
+              ),
+            ),
+          ],
+          if (products.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: products.map((p) {
+                final prod = p as Map<String, dynamic>;
+                final name = prod['product'] as String? ?? '';
+                final trend = prod['trend'] as String? ?? 'stable';
+                final cfg = _trendConfig[trend] ?? _trendConfig['stable']!;
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: cfg.color.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: cfg.color.withOpacity(0.2)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(cfg.icon, size: 14, color: cfg.color),
+                      const SizedBox(width: 5),
+                      Text(
+                        name,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: cfg.color,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+          if (action.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppTheme.primarySurface,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.lightbulb_outline_rounded, size: 13, color: AppTheme.primary),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      action,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.primary,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHOP INTELLIGENCE CARD  (experience engine)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ShopIntelligenceCard extends StatelessWidget {
+  final Map<String, dynamic> card;
+  const _ShopIntelligenceCard(this.card);
+
+  @override
+  Widget build(BuildContext context) {
+    final insight = card['insight'] as String? ?? '';
+    final nextActions = (card['nextActions'] as List?) ?? [];
+    final memoryStrength = card['memoryStrength'] as String? ?? '';
+    final momentum = card['businessMomentum'] as String? ?? '';
+    if (insight.isEmpty) return const SizedBox.shrink();
+
+    Color momentumColor;
+    IconData momentumIcon;
+    switch (momentum) {
+      case 'growing':
+        momentumColor = AppTheme.success;
+        momentumIcon = Icons.trending_up_rounded;
+        break;
+      case 'slowing':
+        momentumColor = AppTheme.error;
+        momentumIcon = Icons.trending_down_rounded;
+        break;
+      default:
+        momentumColor = AppTheme.primary;
+        momentumIcon = Icons.trending_flat_rounded;
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome_rounded, size: 16, color: AppTheme.primary),
+              const SizedBox(width: 8),
+              const Text(
+                'Shop Intelligence',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              if (memoryStrength.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    memoryStrength,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.primary,
+                    ),
+                  ),
+                ),
+              if (momentum.isNotEmpty) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: momentumColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(momentumIcon, size: 12, color: momentumColor),
+                      const SizedBox(width: 3),
+                      Text(
+                        momentum,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: momentumColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            insight,
+            style: const TextStyle(
+              fontSize: 13,
+              color: AppTheme.textSecondary,
+              height: 1.5,
+            ),
+          ),
+          if (nextActions.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            ...nextActions.map((a) => Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Row(
+                children: [
+                  const Icon(Icons.chevron_right_rounded, size: 14, color: AppTheme.primary),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      a.toString(),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.primary,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )),
+          ],
         ],
       ),
     );
