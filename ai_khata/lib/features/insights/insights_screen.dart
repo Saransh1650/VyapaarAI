@@ -293,8 +293,9 @@ class _InsightsScreenState extends State<InsightsScreen> {
         return _EventContextCard(_normalizeEventCard(card));
       case 'info':
         return _GuidanceInfoCard(card);
-      case 'strength_amplification':
-        return _StrengthAmplificationCard(card);
+      case 'dead_stock':
+      case 'strength_amplification': // legacy cached data
+        return _DeadStockCard(card);
       case 'sales_expansion':
         return _SalesExpansionCard(card);
       case 'momentum_pattern':
@@ -1158,15 +1159,15 @@ class _GuidanceInfoCard extends StatelessWidget {
 // STRENGTH AMPLIFICATION CARD  (experience engine)
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _StrengthAmplificationCard extends StatelessWidget {
+class _DeadStockCard extends StatelessWidget {
   final Map<String, dynamic> card;
-  const _StrengthAmplificationCard(this.card);
+  const _DeadStockCard(this.card);
 
   @override
   Widget build(BuildContext context) {
-    final insight = card['insight'] as String? ?? '';
-    final items = (card['items'] as List?) ?? [];
-    if (items.isEmpty) return const SizedBox.shrink();
+    final deadItems = (card['deadItems'] as List?) ?? [];
+    final swapIdeas = (card['swapIdeas'] as List?) ?? [];
+    if (deadItems.isEmpty) return const SizedBox.shrink();
 
     return Container(
       width: double.infinity,
@@ -1177,6 +1178,7 @@ class _StrengthAmplificationCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Header ────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
             child: Row(
@@ -1184,19 +1186,19 @@ class _StrengthAmplificationCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(7),
                   decoration: BoxDecoration(
-                    color: AppTheme.success.withOpacity(0.12),
+                    color: Colors.amber.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: const Icon(
-                    Icons.workspace_premium_rounded,
+                    Icons.hourglass_empty_rounded,
                     size: 16,
-                    color: AppTheme.success,
+                    color: Colors.amber,
                   ),
                 ),
                 const SizedBox(width: 10),
                 const Expanded(
                   child: Text(
-                    'Your Strengths',
+                    'Dead Stock',
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 16,
@@ -1207,94 +1209,162 @@ class _StrengthAmplificationCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: AppTheme.success.withOpacity(0.1),
+                    color: AppTheme.error.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    '${items.length} top',
+                    '${deadItems.length} items',
                     style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
-                      color: AppTheme.success,
+                      color: AppTheme.error,
                     ),
                   ),
                 ),
               ],
             ),
           ),
-          if (insight.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-              child: Text(
-                insight,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppTheme.textSecondary,
-                  height: 1.4,
-                ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Text(
+              'Not sold in 28 days — consider returning or swapping with faster items',
+              style: TextStyle(
+                fontSize: 12,
+                color: AppTheme.textSecondary,
+                height: 1.4,
               ),
             ),
+          ),
           const Divider(color: AppTheme.divider, height: 1),
-          ...items.map((item) {
+          // ── Dead items list ────────────────────────────────────────
+          ...deadItems.map((item) {
             final it = item as Map<String, dynamic>;
             final product = it['product'] as String? ?? '';
-            final reason = it['reason'] as String? ?? '';
-            final strength = double.tryParse(it['memoryStrength']?.toString() ?? '0') ?? 0.0;
-            final pct = (strength * 100).round();
+            final quantity = it['quantity'];
+            final unit = it['unit'] as String? ?? 'units';
+            final isNoSales = (it['status'] as String?) == 'no_sales';
             return Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.star_rounded, size: 16, color: AppTheme.success),
+                  Icon(
+                    isNoSales
+                        ? Icons.do_not_disturb_rounded
+                        : Icons.trending_down_rounded,
+                    size: 16,
+                    color: isNoSales ? AppTheme.error : Colors.amber.shade700,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                product,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                  color: AppTheme.textPrimary,
-                                ),
-                              ),
-                            ),
-                            if (pct > 0)
-                              Text(
-                                '$pct% match',
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppTheme.success,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                          ],
-                        ),
-                        if (reason.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: Text(
-                              reason,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppTheme.textSecondary,
-                                height: 1.4,
-                              ),
-                            ),
-                          ),
-                      ],
+                    child: Text(
+                      product,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '$quantity $unit',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: isNoSales
+                          ? AppTheme.error.withOpacity(0.1)
+                          : Colors.amber.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      isNoSales ? 'No Sales' : 'Slowing',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: isNoSales ? AppTheme.error : Colors.amber.shade700,
+                      ),
                     ),
                   ),
                 ],
               ),
             );
           }),
-          const SizedBox(height: 8),
+          // ── Swap ideas ─────────────────────────────────────────────
+          if (swapIdeas.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Divider(color: AppTheme.divider, height: 1),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Text(
+                'Swap Ideas',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ),
+            ...swapIdeas.map((idea) {
+              final i = idea as Map<String, dynamic>;
+              final product = i['product'] as String? ?? '';
+              final reason = i['reason'] as String? ?? '';
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 20,
+                      height: 20,
+                      decoration: BoxDecoration(
+                        color: AppTheme.primary.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.add_rounded,
+                        size: 14,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            product,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          if (reason.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                reason,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppTheme.textSecondary,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+          const SizedBox(height: 12),
         ],
       ),
     );
