@@ -2,7 +2,7 @@
 
 > **What this document is:** A complete, screen-by-screen, flow-by-flow reference for the entire AI Khata app — Flutter front-end, Node.js back-end, AI system, database schema, and all the rules that hold it together. If you want to understand what happens when a user taps anything, this is the document.
 >
-> Last updated: **28 February 2026**
+> Last updated: **3 March 2026**
 
 ---
 
@@ -36,12 +36,18 @@
    - [9.8 Stocks & Order Items Modules](#98-stocks--order-items-modules)
    - [9.9 AI Module](#99-ai-module)
 10. [The AI System (Deep Dive)](#10-the-ai-system-deep-dive)
-    - [10.1 Three Insight Types](#101-three-insight-types)
+    - [10.1 Insight Types](#101-insight-types)
     - [10.2 When AI Runs](#102-when-ai-runs)
     - [10.3 Worker: refreshInsights.js](#103-worker-refreshinsightsjs)
-    - [10.4 Anti-Hallucination Rule](#104-anti-hallucination-rule)
-    - [10.5 Gemini Prompts (summarised)](#105-gemini-prompts-summarised)
+    - [10.4 Anti-Hallucination Rules](#104-anti-hallucination-rules)
+    - [10.5 Gemini Prompt (Context-Aware Guidance)](#105-gemini-prompt-context-aware-guidance)
     - [10.6 The Golden Rule: App Never Calls AI](#106-the-golden-rule-app-never-calls-ai)
+    - [10.7 RAG Memory System](#107-rag-memory-system)
+    - [10.8 RAG Learning Phase](#108-rag-learning-phase)
+    - [10.9 Relationship Discovery](#109-relationship-discovery)
+    - [10.10 Experience Engine (Retrieval + Generation)](#1010-experience-engine-retrieval--generation)
+    - [10.11 RAG Data Flow End-to-End](#1011-rag-data-flow-end-to-end)
+    - [10.12 Confidence & Frequency Model](#1012-confidence--frequency-model)
 11. [Database Schema](#11-database-schema)
 12. [Key Business Rules & Constraints](#12-key-business-rules--constraints)
 
@@ -602,7 +608,11 @@ The `generatedAt` timestamp is shown as a humanised "Updated Xm/h ago" badge at 
 #### Mode: NORMAL vs EVENT
 
 - **NORMAL** — Default. No festival banner.
-- **EVENT** — When an upcoming festival is ≤ 10 days away. A warm amber **"Festival Mode"** banner appears at the top, naming the festival.
+- **EVENT** — When an upcoming festival is ≤ 10 days away. A **"Festival Mode"** banner appears at the top:
+  - Gradient shifts to red-tinted when critical-urgency items exist, amber otherwise
+  - Shows the AI-generated `summary` line (e.g., "Holi is tomorrow — here's what will fly off the shelves")
+  - Urgency count badges: **"🔴 2 Need Now"** (critical) and **"🟠 3 Stock Up"** (high) — only shown when counts > 0
+  - The banner reads data from the `event_context` card's `items[].urgency` field
 
 #### Four Card Types
 
@@ -655,26 +665,44 @@ The `guidance[]` array contains objects with `type` field. The app renders them 
 
 ---
 
-**🎉 Festival Prep (`_EventContextCard`, type: `event_context`)**
+**🔥 Festival Demand (`_EventContextCard`, type: `event_context`)**
 
 Only appears when `mode == "EVENT"` (festival ≤ 10 days away).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  🎉  Holi Prep                                              │
+│  🔥  Holi — Stock Up                                        │
 │  ───────────────────────────────────────────────────────── │
-│  ✅ Snacks                              [In Stock]  [Order] │
-│     Increase stock slightly                                 │
+│  ‼️ Milk                               [🔴 Order Now] [Order]│
+│     Holi sweets need lots of milk — stock 3x usual          │
+│     → Order extra today                                     │
 │                                                             │
-│  ✨ Gulal                              [Opportunity] [Order] │
-│     Optional — customers may look for this                  │
+│  📈 Sugar                              [🟠 Stock Up] [Order] │
+│     Heavy use for sweets and thandai — stock 2x usual       │
+│     → Restock before weekend rush                           │
+│                                                             │
+│  ℹ️ Snacks                              [🟡 Extra]  [Order] │
+│     Slightly higher demand expected for gatherings          │
+│     → Keep a bit more than usual                            │
+│                                                             │
+│  ✨ Gulal                               [✨ New]    [Order]  │
+│     Customers will look for colours — stock a small batch   │
+│     → Source from local supplier                            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- Warm amber gradient header with festival name
-- Each item shows classification badge:
-  - **In Stock** (saffron) — product already in inventory, AI suggests action
-  - **Opportunity** (amber) — new item the shop doesn't carry, labeled clearly as optional
+- Header gradient: red-tinted when critical items exist, amber otherwise
+- Header icon: 🔥 fire icon for critical urgency, 📅 event icon otherwise
+- Items sorted by urgency: **critical → high → moderate**
+- Each item row has a tinted background matching its urgency colour
+- **Urgency badges** replace the old classification badges:
+  - **🔴 Order Now** (`critical`, red) — will stock out, order TODAY
+  - **🟠 Stock Up** (`high`, amber) — stock 2-3× normal quantity
+  - **🟡 Extra** (`moderate`, saffron) — stock a bit more than usual
+  - **✨ New** (opportunity) — product not in inventory, suggested as optional
+- **`demand_note`** (new field) — displayed in urgency colour below product name. Explains _why_ demand will surge and how much extra to stock.
+- **`action`** — secondary line with → prefix in muted colour
+- "Order" button quantity scales with urgency: critical=30, high=20, moderate=10
 - Each row has an "Order" / "✓ Added" toggle tied to `OrderListProvider`
 
 ---
@@ -1256,6 +1284,15 @@ This endpoint also calls `checkAndRefreshIfNeeded()` **in the background** — i
 
 ## 10. The AI System (Deep Dive)
 
+The AI system has two layers that work together:
+
+1. **RAG Memory Layer** — a PostgreSQL-backed store of learned shop behaviour (product patterns, product-pair relationships, shop identity insights). This layer grows silently with every transaction and is never visible to the user.
+2. **Guidance Generation Layer** — a Node.js worker that reads from RAG memory + live DB data, builds a rich context, and calls Gemini once per store to produce structured guidance cards.
+
+When enough data exists (≥ 10 ledger entries), the guidance generation layer uses RAG context. When data is thin, it falls back to a simpler inventory-only prompt. The app always sees the same response shape either way.
+
+---
+
 ### 10.1 Insight Types
 
 | Type     | DB `type` column | What it contains                                                                                      |
@@ -1315,7 +1352,12 @@ This is the only file that calls Gemini. It runs in a Node.js worker thread.
    }
    ```
 
-3. **Send to Gemini** — single `generateGuidance(input)` call with the context-aware prompt
+3. **Send to Gemini** — single `generateGuidance(input)` call. The prompt dynamically expands in EVENT mode:
+   - **Festival demand analysis step** — the AI must scan every inventory item and decide if demand will spike for the upcoming festival
+   - Each item gets an urgency: `critical` (will stock out → order TODAY), `high` (stock 2-3×), `moderate` (stock extra)
+   - A `demand_note` explains _why_ demand surges (e.g., "Holi sweets need lots of milk")
+   - `stock_check` statuses are **festival-adjusted** — items normally GOOD may become WATCH/LOW when festival demand is factored in
+   - Items not in inventory but festival-relevant get `classification: "opportunity"`
 
 4. **Validate & upsert** — checks response has `mode` + `guidance[]`; falls back gracefully
 
@@ -1340,7 +1382,8 @@ The new guidance system uses **inventory-first logic** — the AI only sees what
 1. **Database is truth** — the prompt explicitly tells the AI: "only reason from the data provided below." No external knowledge about typical store inventories.
 2. **Festival knowledge must be inferred** — the AI only receives `{ name, daysAway }` for festivals. It must internally understand what Holi or Diwali means but ground all recommendations in the shop's actual inventory and sales data.
 3. **Existing products preferred** — in `event_context` cards, items from the shop's inventory get `classification: "existing_product"`. Genuinely new suggestions (items the shop doesn't stock) get `classification: "opportunity"` to clearly signal they're optional.
-4. **No numerical predictions** — the prompt forbids sales numbers, percentages, forecasts, and revenue estimates. Only qualitative reasoning is allowed.
+4. **Festival demand must be grounded** — the AI is given only `{ name, daysAway }` and the shop's inventory. It must use domain knowledge about festivals (e.g., Holi → sweets → milk/sugar/ghee) but only flag items that actually exist in the shop's inventory as `existing_product`. New suggestions are clearly labeled `opportunity` with a demand note explaining why.
+5. **No numerical predictions** — the prompt forbids sales numbers, percentages, forecasts, and revenue estimates. Only qualitative reasoning is allowed. Stocking guidance uses relative language ("stock 2-3× usual", "keep extra") rather than absolute quantities.
 
 ---
 
@@ -1362,20 +1405,39 @@ INPUT DATA: { storeType, todayDate, inventory[], recentSales[], shopActivity, up
 REASONING STEPS (internal only):
 1. Stock Readiness → classify items: GOOD / WATCH / LOW
 2. Pattern Understanding → rising/slowing/new trends
-3. Festival Context (if daysAway ≤ 10) → which existing products are affected
+3. Festival Demand Analysis (EVENT mode only, daysAway ≤ 10):
+   a) Scan every inventory item — will demand spike for this festival?
+   b) Assign urgency: critical / high / moderate
+   c) Flag opportunity items not in inventory
+   d) Items normally GOOD in stock_check must be bumped to WATCH/LOW if festival demand will drain them
 4. Produce guidance cards
 
-OUTPUT: { mode: "NORMAL|EVENT", guidance: [
+OUTPUT (NORMAL): { mode: "NORMAL", guidance: [
   { type: "stock_check", items: [{ product, status, reason, action }] },
   { type: "pattern", insight, action },
-  { type: "event_context", event, items: [{ product, classification, action }] },
   { type: "info", insight }
 ] }
 
+OUTPUT (EVENT): { mode: "EVENT", guidance: [
+  { type: "stock_check", items: [{ product, status, reason, action }] },   ← festival-adjusted statuses
+  { type: "pattern", insight, action },
+  { type: "event_context", event, summary, items: [
+    { product, urgency, demand_note, classification, action }
+  ] },
+  { type: "info", insight }
+] }
+
+event_context fields:
+- summary: one-line banner text (e.g. "Holi is tomorrow — here's what will fly off the shelves")
+- urgency: "critical" (order TODAY) / "high" (stock 2-3×) / "moderate" (stock extra)
+- demand_note: WHY demand surges + stocking guidance
+- classification: "existing_product" / "opportunity"
+- Items sorted: critical first → high → moderate
+
 CARD RULES:
-- stock_check: always include if inventory exists, max 8 items
+- stock_check: always include if inventory exists, max 8 items. In EVENT mode, statuses factor in festival demand.
 - pattern: 0-2 cards if trends are notable
-- event_context: only when mode is EVENT
+- event_context: only when mode is EVENT. Must comprehensively flag every inventory item affected by the festival.
 - info: when data is thin or as a general tip
 - Tone: short, shopkeeper-friendly, no jargon
 ```
@@ -1390,6 +1452,285 @@ This is enforced at every layer:
 - **`POST /ai/insights/refresh`** was deliberately removed from the routes file (comment left as documentation)
 - **`InsightsScreen._onPullRefresh()`** only calls `_loadInsights()` (a GET), never posts to any AI endpoint
 - **`DashboardHomeContent._loadUrgentAlerts()`** only reads from `/ai/insights` GET
+
+---
+
+### 10.7 RAG Memory System
+
+The RAG memory system is a set of three PostgreSQL tables (defined in `src/config/rag_memory.sql`) that accumulate shop-specific knowledge over time. This is what makes AI Khata's guidance _shop-specific_ rather than generic: the AI does not guess what a kirana typically sells — it knows what _this_ kirana actually sells, in what combinations, on which days.
+
+#### Three Memory Tables
+
+**`shop_memory`** — Individual product and operational behaviour
+
+| Column        | Type         | Purpose                                                               |
+| ------------- | ------------ | --------------------------------------------------------------------- |
+| `store_id`    | UUID FK      | Scopes all memory to one store                                        |
+| `memory_type` | VARCHAR(50)  | `product_behavior`, `operational_rhythm`, `seasonal_pattern`, etc.    |
+| `context`     | VARCHAR(255) | Product name, `Monday_morning`, festival name, etc.                   |
+| `memory_data` | JSONB        | The learned pattern (avg qty, day, performance indicator, etc.)       |
+| `confidence`  | DECIMAL(3,2) | How reliable this pattern is (0.30 → 1.0). Grows by +0.05 each repeat |
+| `frequency`   | INTEGER      | How many times this pattern was observed                              |
+
+Unique constraint: `(store_id, memory_type, context)` — one memory cell per pattern.
+
+**`product_relationships`** — Which products are bought together
+
+| Column              | Type         | Purpose                                                                             |
+| ------------------- | ------------ | ----------------------------------------------------------------------------------- |
+| `product_a/b`       | VARCHAR(255) | The two products in the relationship                                                |
+| `relationship_type` | VARCHAR(50)  | `frequently_together`, `sequential`, `complementary`, `seasonal_pair`, `substitute` |
+| `strength`          | DECIMAL(3,2) | Relationship strength (0–1)                                                         |
+| `occurrences`       | INTEGER      | How many times this pair was observed                                               |
+| `context`           | VARCHAR(255) | Optional: festival/month context for seasonal pairs                                 |
+
+**`experience_insights`** — High-level shop identity conclusions
+
+| Column             | Type         | Purpose                                                                                            |
+| ------------------ | ------------ | -------------------------------------------------------------------------------------------------- |
+| `insight_category` | VARCHAR(50)  | `shop_identity`, `customer_preference`, `strength_product`, `opportunity_gap`, `seasonal_strength` |
+| `title`            | VARCHAR(255) | Short label for the insight                                                                        |
+| `description`      | TEXT         | Human-readable summary of the finding                                                              |
+| `evidence`         | JSONB        | Supporting data (top products, pair strengths, etc.)                                               |
+| `confidence`       | DECIMAL(3,2) | How confident the system is in this insight                                                        |
+| `impact`           | VARCHAR(50)  | `low` / `medium` / `high`                                                                          |
+
+---
+
+### 10.8 RAG Learning Phase
+
+Memory is written in three ways, each triggered at a different stage:
+
+#### Trigger A — Real-time (every new ledger entry)
+
+`bills/service.js` and `ledger/service.js` call `learnFromNewTransaction(ledgerEntryId)` in `src/ai/transactionLearner.js` immediately after a transaction is committed. The learner:
+
+1. Fetches the transaction + its line items from the DB
+2. Calls `learnFromTransaction(userId, storeId, transactionData)` in `shopMemory.js`, which fans out into three parallel writes:
+
+```
+learnFromTransaction()
+ ├── learnProductBehavior()      — for each line item:
+ │    • avgQty, avgPrice, dayOfWeek, isWeekend, performanceIndicator
+ │    • upsertShopMemory(storeId, 'product_behavior', productName, data)
+ ├── learnProductRelationships() — for every pair of items in the transaction:
+ │    • updateRelationshipStrength(storeId, A, B, 'frequently_together', month)
+ │    • updateRelationshipStrength(storeId, B, A, 'frequently_together', month)  ← bidirectional
+ └── learnOperationalRhythm()   — for the transaction as a whole:
+      • dayOfWeek, timeOfDay (morning/afternoon/evening), peak indicator
+      • upsertShopMemory(storeId, 'operational_rhythm', 'Monday_morning', data)
+```
+
+3. Checks `checkTriggerDeepLearning(storeId)` — if total transaction count hits a milestone (20, 50, 100, 200, 500), triggers deeper analysis asynchronously via `setImmediate()`:
+   - `discoverProductRelationships(storeId, 90)` — runs analytical SQL across 90 days
+   - `generateExperienceInsights(storeId)` — synthesises high-level shop identity conclusions
+
+#### Trigger B — Refresh worker (every AI refresh cycle)
+
+`refreshInsights.js` calls `updateShopMemory()` which replays the last 7 days of transactions (up to 50) through the learning pipeline. This acts as a catch-up for any missed real-time triggers and keeps memory fresh.
+
+#### Trigger C — Scheduled relationship discovery
+
+When `refreshInsights.js` runs and ledger count ≥ 20, it also fires `discoverProductRelationships(storeId, 90)` in the background (non-blocking). This re-runs the full analytical SQL suite across 90 days of history to catch patterns that incremental learning may have missed.
+
+---
+
+### 10.9 Relationship Discovery
+
+`src/ai/relationshipIntelligence.js` runs four types of market-basket analysis using pure SQL against `ledger_entries` + `line_items`. All four run in parallel inside `discoverProductRelationships()`.
+
+#### Type 1 — Frequent Pairs (`frequently_together`)
+
+SQL approach: market basket analysis with minimum support threshold.
+
+```sql
+-- Simplified concept
+product_pairs AS (
+  SELECT t1.product_name AS product_a,
+         t2.product_name AS product_b,
+         COUNT(DISTINCT t1.transaction_id) AS transaction_count,
+         COUNT(*) / total_transactions AS support
+  FROM transaction_products t1
+  JOIN transaction_products t2 ON t1.transaction_id = t2.transaction_id
+  WHERE t1.product_name < t2.product_name   -- deduplicate (A,B) vs (B,A)
+  GROUP BY t1.product_name, t2.product_name
+  HAVING COUNT(*) >= 3
+)
+```
+
+- **Strength** = `MIN(support × 2, 0.95)` — scales support to 0–1 range
+- Minimum: ≥ 3 co-occurrences, ≥ 3 shared transactions
+
+#### Type 2 — Sequential Patterns (`sequential`)
+
+SQL approach: `ROW_NUMBER()` window function over purchases partitioned by merchant, looking for product B appearing in the _next_ transaction within 7 days.
+
+- Uses `merchant` field as a customer proxy
+- Minimum: ≥ 2 sequential occurrences
+- **Strength** = `MIN(sequenceCount / 5, 0.85)`
+
+#### Type 3 — Complementary Items (`complementary`)
+
+SQL approach: basket analysis with a **lift** calculation — items where the combined purchase rate is higher than would be expected by chance.
+
+- Filters to products with ≥ 5 individual sales (ensures statistical significance)
+- Minimum lift: 1.5
+- **Strength** = `MIN(lift / 3, 0.90)`
+
+#### Type 4 — Seasonal Pairs (`seasonal_pair`)
+
+SQL approach: groups pairs by calendar month and finds pairs that consistently co-occur in _the same month_ across multiple years.
+
+- Minimum: ≥ 2 seasonal co-occurrences
+- **Strength** = `MIN(coOccurrences / 4, 0.80)`
+
+After all four run, results are deduplicated (same pair from multiple discovery methods → highest strength wins) and stored via `storeRelationship()` using `ON CONFLICT DO UPDATE`.
+
+---
+
+### 10.10 Experience Engine (Retrieval + Generation)
+
+`src/ai/experienceEngine.js` is the bridge between raw memory and AI guidance. It runs inside `refreshInsights.js` when ledger count ≥ 10.
+
+#### Priority Hierarchy
+
+The engine assembles context in strict priority order — higher-priority signals override lower-priority ones:
+
+| Priority    | Source                     | What it contributes                                        |
+| ----------- | -------------------------- | ---------------------------------------------------------- |
+| 1 (highest) | RAG Memory (`shop_memory`) | Strength products, operational rhythm, behavioral patterns |
+| 2           | Product Relationships      | Expansion opportunities (have A, missing B)                |
+| 3           | Current context            | Business rhythm, sales trends, festival intelligence       |
+| 4 (lowest)  | Inventory state            | Stock status — supporting context only, not the driver     |
+
+#### `generateExperienceGuidance()` flow
+
+```
+generateExperienceGuidance(storeId, storeType, input)
+ ├── P1: generateMemoryBasedRecommendations(storeId, inventory, input)
+ │    ├── getProductExperience()        → products with confidence > 0.60, freq ≥ 3
+ │    ├── getProductRelationships()     → pairs with strength ≥ 0.30
+ │    ├── getExperienceInsights()       → high-level shop identity cards
+ │    ├── identifyStrengthProducts()    → top 5 by confidence
+ │    ├── identifyExpansionOpportunities() → pairs where shop has A but not B (strength > 0.50)
+ │    └── calculateMemoryStrength()    → overall RAG maturity score
+ ├── P2: generateSalesExpansionGuidance(storeId, inventory, input)
+ │    └── uses product_relationships to build cross-sell suggestions
+ ├── P3: generateContextualIntelligence(storeId, input)
+ │    ├── analyzeBusinessRhythm()       → momentum, peak days, opportunity window
+ │    ├── analyzeSalesTrends()          → rising / slowing / new products
+ │    └── getFestivalRelationshipGuidance() (only if daysAway ≤ 10)
+ ├── P4: analyzeInventoryState()        → strength product stock status
+ └── synthesizeExperienceGuidance()    → builds final context → calls Gemini
+```
+
+#### What Gemini receives when RAG is active
+
+In addition to the standard `input` object (inventory, recentSales, shopActivity, upcomingFestival), Gemini also receives the assembled RAG context:
+
+```json
+{
+  "shopMemory": {
+    "strengthBased": [
+      { "product": "Milk", "reason": "Consistently sells in high volumes", "confidence": 0.85 }
+    ],
+    "expansionBased": [
+      { "trigger": "Milk", "opportunity": "Curd", "strength": 0.72,
+        "suggestion": "Consider stocking Curd to increase basket size" }
+    ],
+    "experienceInsights": [
+      { "category": "shop_identity", "title": "Core Product Strengths",
+        "description": "This shop consistently performs well with: Milk, Rice, Sugar" }
+    ],
+    "memoryStrength": { "overallStrength": 0.63, "isExperienced": true }
+  },
+  "salesExpansion": { ... },
+  "contextualGuidance": { "businessRhythm": { "momentum": "growing" }, ... }
+}
+```
+
+This context allows Gemini to say things like _"Curd is missing from your inventory — your customers who buy Milk often also want Curd"_ instead of generic restock advice.
+
+#### Fallback path
+
+```
+ledger count < 10   → traditional generateGuidance() (inventory + sales only, no RAG)
+ledger count ≥ 10   → generateExperienceGuidance() (full RAG context)
+RAG call fails      → falls back to traditional generateGuidance()
+```
+
+---
+
+### 10.11 RAG Data Flow End-to-End
+
+```
+ User adds a bill (OCR or manual)
+       │
+       ▼
+ Bill saved → ledger_entry created → line_items created
+       │
+       ├──► learnFromNewTransaction(ledgerEntryId)        [real-time, async]
+       │         │
+       │         ├── learnProductBehavior()     ──► shop_memory (product_behavior rows)
+       │         ├── learnProductRelationships() ──► product_relationships rows
+       │         └── learnOperationalRhythm()   ──► shop_memory (operational_rhythm rows)
+       │                   │
+       │                   └── if milestone (20/50/100…):
+       │                         discoverProductRelationships() ──► product_relationships
+       │                         generateExperienceInsights()   ──► experience_insights
+       │
+       └──► checkAndRefreshIfNeeded()  [if ≥20 new entries since last refresh]
+
+
+ Every 8 hours (or threshold hit):
+ refreshInsights.js worker
+       │
+       ├── updateShopMemory()  (last 7 days replay)  ──► shop_memory
+       │
+       ├── if ledger ≥ 10:
+       │     generateExperienceGuidance()
+       │           │
+       │           ├── READ shop_memory, product_relationships, experience_insights
+       │           ├── ASSEMBLE rich context (RAG priority 1→4)
+       │           └── CALL Gemini → structured guidance cards
+       │
+       ├── if ledger < 10:
+       │     generateGuidance()  (inventory-only prompt)
+       │
+       └── upsertInsight('guidance', result) ──► ai_insights table
+
+
+ App calls GET /ai/insights
+       │
+       └── returns cached ai_insights row
+             (enriched with live stock quantities before returning)
+```
+
+---
+
+### 10.12 Confidence & Frequency Model
+
+Every memory cell has two independent maturity metrics:
+
+| Metric       | Starting value | Growth per observation | Cap  | Meaning                            |
+| ------------ | -------------- | ---------------------- | ---- | ---------------------------------- |
+| `confidence` | 0.30           | +0.05                  | 1.0  | Statistical reliability of pattern |
+| `frequency`  | 1              | +1                     | none | Raw observation count              |
+
+After **5+ observations**, the `memory_data` JSONB is merged (new data appended via `||`) rather than replaced — preserving historical context.
+
+Usage thresholds applied in the engine:
+
+| Threshold                       | Effect                                               |
+| ------------------------------- | ---------------------------------------------------- |
+| `confidence > 0.60 && freq ≥ 3` | Product qualifies as a "strength product"            |
+| `strength > 0.50`               | Relationship is shown as an expansion opportunity    |
+| `strength > 0.70 && occur ≥ 3`  | Pair qualifies as a "strong pairing" insight         |
+| `memoryStrength.isExperienced`  | `exp ≥ 10 entries && relationships ≥ 5` → RAG mature |
+
+The **overall memory strength** score used to assess RAG maturity:
+
+$$\text{overallStrength} = (\text{avgConfidence} \times 0.4) + \left(\min\left(\frac{\text{avgFrequency}}{10}, 1\right) \times 0.3\right) + (\text{avgRelStrength} \times 0.3)$$
 
 ---
 
@@ -1518,6 +1859,79 @@ order_items (
   UNIQUE (user_id, name)    -- a product can only appear once in the order list
 )
 
+-- RAG Memory Tables (src/config/rag_memory.sql)
+
+-- Learned product and operational behaviour per store
+shop_memory (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id     UUID REFERENCES stores(id) ON DELETE CASCADE,
+  memory_type  VARCHAR(50) NOT NULL
+               CHECK (memory_type IN (
+                 'product_behavior', 'product_relationship',
+                 'seasonal_pattern', 'customer_behavior', 'operational_rhythm'
+               )),
+  context      VARCHAR(255) NOT NULL,   -- product name, 'Monday_morning', etc.
+  memory_data  JSONB NOT NULL,
+  confidence   DECIMAL(3,2) DEFAULT 0.50,  -- grows +0.05 per observation, max 1.0
+  frequency    INTEGER DEFAULT 1,
+  last_seen    TIMESTAMP DEFAULT NOW(),
+  created_at   TIMESTAMP DEFAULT NOW(),
+  updated_at   TIMESTAMP DEFAULT NOW(),
+  UNIQUE (store_id, memory_type, context)
+)
+
+-- Products frequently bought together
+product_relationships (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id          UUID REFERENCES stores(id) ON DELETE CASCADE,
+  product_a         VARCHAR(255) NOT NULL,
+  product_b         VARCHAR(255) NOT NULL,
+  relationship_type VARCHAR(50) NOT NULL
+                    CHECK (relationship_type IN (
+                      'frequently_together', 'sequential', 'complementary',
+                      'seasonal_pair', 'substitute'
+                    )),
+  strength          DECIMAL(3,2) DEFAULT 0.50,
+  occurrences       INTEGER DEFAULT 1,
+  context           VARCHAR(255),       -- festival / month for seasonal pairs
+  last_occurrence   TIMESTAMP DEFAULT NOW(),
+  created_at        TIMESTAMP DEFAULT NOW(),
+  UNIQUE (store_id, product_a, product_b, relationship_type, context)
+)
+
+-- High-level shop identity & behaviour conclusions
+experience_insights (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id          UUID REFERENCES stores(id) ON DELETE CASCADE,
+  insight_category  VARCHAR(50) NOT NULL
+                    CHECK (insight_category IN (
+                      'shop_identity', 'customer_preference', 'strength_product',
+                      'opportunity_gap', 'seasonal_strength'
+                    )),
+  title             VARCHAR(255) NOT NULL,
+  description       TEXT NOT NULL,
+  evidence          JSONB,
+  confidence        DECIMAL(3,2) DEFAULT 0.50,
+  impact            VARCHAR(50) DEFAULT 'medium' CHECK (impact IN ('low','medium','high')),
+  created_at        TIMESTAMP DEFAULT NOW(),
+  updated_at        TIMESTAMP DEFAULT NOW(),
+  UNIQUE (store_id, insight_category, title)
+)
+
+-- Tracks how memory suggestions are used (feedback loop, future use)
+memory_usage (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id    UUID REFERENCES stores(id) ON DELETE CASCADE,
+  memory_id   UUID REFERENCES shop_memory(id) ON DELETE CASCADE,
+  usage_type  VARCHAR(50) NOT NULL
+              CHECK (usage_type IN (
+                'suggestion_used', 'suggestion_ignored',
+                'pattern_confirmed', 'pattern_violated'
+              )),
+  context     JSONB,
+  created_at  TIMESTAMP DEFAULT NOW()
+)
+
 -- Key Indexes
 CREATE INDEX idx_ledger_user_date     ON ledger_entries(user_id, transaction_date);
 CREATE INDEX idx_line_items_product   ON line_items(product_name);
@@ -1525,6 +1939,12 @@ CREATE INDEX idx_bills_user_status    ON bills(user_id, status);
 CREATE INDEX idx_ai_insights_store    ON ai_insights(store_id, type);
 CREATE INDEX idx_stock_items_store    ON stock_items(store_id);
 CREATE INDEX idx_stores_user          ON stores(user_id);
+-- RAG indexes
+CREATE INDEX idx_shop_memory_store_type       ON shop_memory(store_id, memory_type);
+CREATE INDEX idx_shop_memory_confidence       ON shop_memory(confidence DESC);
+CREATE INDEX idx_product_relationships_store  ON product_relationships(store_id);
+CREATE INDEX idx_product_relationships_strength ON product_relationships(strength DESC);
+CREATE INDEX idx_experience_insights_store    ON experience_insights(store_id);
 ```
 
 ---
@@ -1570,9 +1990,23 @@ CREATE INDEX idx_stores_user          ON stores(user_id);
 - **Context-Aware Guidance**: single AI call per store that combines inventory, trends, and festival context into structured guidance cards (stock_check, pattern, event_context, info)
 - **No numerical predictions**: the AI is explicitly forbidden from returning sales numbers, percentages, forecasts, or revenue estimates — qualitative reasoning only
 - **Inventory-first logic**: AI evaluates existing stock → detects patterns → checks festival relevance → suggests opportunities. New items are clearly labeled as "opportunity"
-- Festival knowledge is inferred from name alone — the AI only receives `{ name, daysAway }`, not cultural details
+- **Festival demand surge**: In EVENT mode, the prompt forces the AI to scan every inventory item for festival relevance, assign urgency levels (critical/high/moderate), and provide demand notes explaining why demand spikes. Stock health statuses are festival-adjusted — an item "GOOD" normally may become "WATCH" or "LOW" when festival demand is factored in.
+- Festival knowledge is inferred from name alone — the AI only receives `{ name, daysAway }`, not cultural details. The AI must use domain knowledge about Indian festivals to identify relevant products.
 - AI workers are staggered 10 seconds apart when multiple stores refresh at the same time (scheduler runs)
 - In-flight deduplication: `refreshInFlight` Set prevents two simultaneous refreshes for the same store
+
+### RAG Memory System
+
+- Memory is **per-store** — all three RAG tables are scoped by `store_id`. One store's patterns never influence another store.
+- Memory cells use **upsert semantics** (`ON CONFLICT DO UPDATE`). The system never deletes memory rows — frequency and confidence only ever increase.
+- After 5+ observations, `memory_data` JSONB is **merged** (new `||` old) rather than replaced, preserving historical context.
+- Real-time learning (`learnFromNewTransaction`) is **fire-and-forget** — errors are caught and logged but never block the bill-save flow.
+- Deep learning (`discoverProductRelationships`, `generateExperienceInsights`) runs via `setImmediate()` at transaction count milestones (20, 50, 100, 200, 500) — it is non-blocking and never affects response time of a bill save.
+- The `refreshInsights.js` worker replays the last 7 days of transactions on every run as a catch-up mechanism. Memory is eventually consistent even if real-time triggers fail.
+- Relationship discovery requires minimum co-occurrence thresholds (≥3 for frequent pairs, ≥2 for sequential/seasonal) before a relationship is stored — prevents noise from one-off coincidences.
+- RAG guidance is only used when `ledgerCount ≥ 10`. Below that threshold the system falls back to inventory-only guidance to avoid drawing conclusions from insufficient data.
+- Relationship discovery is only triggered when `ledgerCount ≥ 20`, ensuring enough transaction history for meaningful market basket analysis.
+- The `memory_usage` table exists for future feedback-loop work (confirming or violating patterns based on shop owner actions) but is not yet wired to any active logic.
 
 ### UX Philosophy
 

@@ -6,6 +6,7 @@ import 'dart:io';
 import '../../core/api_client.dart';
 import '../../core/theme.dart';
 import '../../core/constants.dart';
+import '../../core/utils/image_utils.dart';
 import '../auth/auth_service.dart';
 import 'package:provider/provider.dart';
 
@@ -330,15 +331,57 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
   String? _error;
 
   Future<void> _pickImage(ImageSource src) async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(source: src, imageQuality: 85);
-    if (picked != null) {
+    setState(() {
+      _error = null;
+    });
+    
+    try {
+      final file = await ImageUtils.pickImage(
+        source: src,
+        imageQuality: 85,
+        preferredCamera: CameraDevice.rear,
+      );
+      
+      if (file != null) {
+        setState(() {
+          _image = file;
+          _error = null;
+          _done = false;
+        });
+      }
+    } catch (e) {
       setState(() {
-        _image = File(picked.path);
-        _error = null;
-        _done = false;
+        _error = ImageUtils.getImagePickerErrorMessage(e);
       });
+      
+      // Show HEIC instructions if it's a HEIC format issue
+      if (e.toString().contains('heic') || e.toString().contains('HEIC')) {
+        _showHEICInstructions();
+      }
+      
+      print('Image picker error: $e');
     }
+  }
+
+  void _showHEICInstructions() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('HEIC Format Not Supported'),
+        content: SingleChildScrollView(
+          child: Text(
+            ImageUtils.getHEICInstructions(),
+            style: const TextStyle(fontSize: 14),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _upload() async {
@@ -487,7 +530,37 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
         style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         textAlign: TextAlign.center,
       ),
-      const SizedBox(height: 36),
+      const SizedBox(height: 24),
+      // Helpful tip for image format
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.primary.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.lightbulb_outline_rounded,
+              color: AppTheme.primary,
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Tip: Use Camera for best results. If selecting from Gallery fails, your image might be in HEIC format.',
+                style: TextStyle(
+                  color: AppTheme.primary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
       Row(
         children: [
           Expanded(
