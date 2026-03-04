@@ -11,6 +11,7 @@ class AuthService extends ChangeNotifier {
 
   bool get isLoggedIn => _token != null;
   bool get onboardingComplete => _onboardingComplete;
+  String? get accessToken => _token;
   String? get storeId => _storeId;
   String? get storeType => _storeType;
   String? get userName => _userName;

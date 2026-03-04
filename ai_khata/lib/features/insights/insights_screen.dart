@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/api_client.dart';
+import '../../core/constants.dart';
 import '../../core/theme.dart';
 import '../auth/auth_service.dart';
 import '../stocks/order_list_provider.dart';
@@ -2119,6 +2121,74 @@ class _ShopIntelligenceCard extends StatelessWidget {
               ),
             )),
           ],
+          // ── Dashboard link ───────────────────────────────────────────────
+          const SizedBox(height: 12),
+          const Divider(color: AppTheme.divider, height: 1),
+          const SizedBox(height: 10),
+          Builder(builder: (bCtx) {
+            return GestureDetector(
+              onTap: () async {
+                final auth = bCtx.read<AuthService>();
+                final token = auth.accessToken ?? '';
+                final storeId = auth.storeId ?? '';
+                final base = AppConstants.baseUrl;
+                // Credentials in URL fragment — never sent to server
+                final fragment = Uri(queryParameters: {
+                  'token': token,
+                  'apiUrl': base,
+                  if (storeId.isNotEmpty) 'storeId': storeId,
+                }).query;
+                final url = Uri.parse('$base/dashboard#$fragment');
+                if (await canLaunchUrl(url)) {
+                  await launchUrl(url, mode: LaunchMode.externalApplication);
+                }
+              },
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(
+                      Icons.bar_chart_rounded,
+                      size: 14,
+                      color: AppTheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'RAG Memory Dashboard',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary,
+                          ),
+                        ),
+                        Text(
+                          'View AI memory, learning graph & analytics',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(
+                    Icons.open_in_new_rounded,
+                    size: 14,
+                    color: AppTheme.primary,
+                  ),
+                ],
+              ),
+            );
+          }),
         ],
       ),
     );
