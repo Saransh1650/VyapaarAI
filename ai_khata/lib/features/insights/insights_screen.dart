@@ -22,6 +22,10 @@ class _InsightsScreenState extends State<InsightsScreen> {
   String? _error;
   String? _generatedAt;
 
+  // Demo occasion override
+  String? _demoOccasion;
+  int _demoDaysAway = 3;
+
   @override
   void initState() {
     super.initState();
@@ -65,17 +69,25 @@ class _InsightsScreenState extends State<InsightsScreen> {
     }
   }
 
-  Future<void> _forceRefresh() async {
+  Future<void> _forceRefresh({String? occasionName, int? daysAway}) async {
     if (_forceRefreshing) return;
     setState(() => _forceRefreshing = true);
     try {
       final auth = context.read<AuthService>();
+      final params = <String, dynamic>{
+        'storeId': auth.storeId,
+        'storeType': auth.storeType,
+      };
+      if (occasionName != null) {
+        params['occasionName'] = occasionName;
+        params['occasionDaysAway'] = (daysAway ?? 3).toString();
+      }
       await ApiClient.instance.dio.post(
         '/ai/insights/force-refresh',
-        queryParameters: {'storeId': auth.storeId, 'storeType': auth.storeType},
+        queryParameters: params,
       );
       // Wait for the worker to finish generating
-      await Future.delayed(const Duration(seconds: 5));
+      await Future.delayed(const Duration(seconds: 6));
       await _loadInsights();
     } catch (_) {
       if (mounted) {
@@ -86,6 +98,251 @@ class _InsightsScreenState extends State<InsightsScreen> {
     } finally {
       if (mounted) setState(() => _forceRefreshing = false);
     }
+  }
+
+  Future<void> _showOccasionPicker() async {
+    const presets = [
+      ('None (real calendar)', null),
+      ('Diwali', 'Diwali'),
+      ('Holi', 'Holi'),
+      ('Eid ul-Fitr', 'Eid ul-Fitr'),
+      ('Navratri', 'Navratri'),
+      ('Durga Puja', 'Durga Puja'),
+      ('Christmas', 'Christmas'),
+      ('New Year', 'New Year'),
+      ('Pongal', 'Pongal'),
+      ('Onam', 'Onam'),
+      ('Raksha Bandhan', 'Raksha Bandhan'),
+    ];
+
+    String? selectedOccasion = _demoOccasion;
+    int selectedDays = _demoDaysAway;
+    final customController = TextEditingController(
+      text: _demoOccasion != null &&
+              !presets.any((p) => p.$2 == _demoOccasion)
+          ? _demoOccasion
+          : '',
+    );
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+            left: 16,
+            right: 16,
+            top: 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppTheme.error.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'DEV',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.error,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Demo Occasion',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 17,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, size: 20),
+                    onPressed: () => Navigator.pop(ctx),
+                    color: AppTheme.textSecondary,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Override the calendar to demo AI predictions for any occasion.',
+                style:
+                    TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              // Preset chips
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: presets.map((p) {
+                  final (label, value) = p;
+                  final isSelected = selectedOccasion == value;
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: isSelected,
+                    selectedColor: AppTheme.primary.withOpacity(0.15),
+                    labelStyle: TextStyle(
+                      fontSize: 13,
+                      fontWeight:
+                          isSelected ? FontWeight.w700 : FontWeight.w400,
+                      color: isSelected
+                          ? AppTheme.primary
+                          : AppTheme.textPrimary,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      side: BorderSide(
+                        color: isSelected
+                            ? AppTheme.primary
+                            : AppTheme.divider,
+                      ),
+                    ),
+                    backgroundColor: AppTheme.surface,
+                    onSelected: (_) => setLocal(() {
+                      selectedOccasion = value;
+                      if (value != null) customController.clear();
+                    }),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+              // Custom name
+              TextField(
+                controller: customController,
+                style: const TextStyle(
+                    fontSize: 14, color: AppTheme.textPrimary),
+                decoration: InputDecoration(
+                  hintText: 'Or type a custom occasion…',
+                  hintStyle: const TextStyle(
+                      fontSize: 13, color: AppTheme.textHint),
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                  filled: true,
+                  fillColor: AppTheme.surface,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide:
+                        const BorderSide(color: AppTheme.divider),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide:
+                        const BorderSide(color: AppTheme.divider),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide:
+                        const BorderSide(color: AppTheme.primary),
+                  ),
+                ),
+                onChanged: (v) => setLocal(() {
+                  selectedOccasion =
+                      v.trim().isEmpty ? null : v.trim();
+                }),
+              ),
+              const SizedBox(height: 16),
+              // Days away
+              Row(
+                children: [
+                  const Text(
+                    'Days away:',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '$selectedDays day${selectedDays == 1 ? '' : 's'}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.primary,
+                    ),
+                  ),
+                  if (selectedDays <= 10)
+                    const Padding(
+                      padding: EdgeInsets.only(left: 8),
+                      child: Text(
+                        '⚡ EVENT mode',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.orange,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              Slider(
+                value: selectedDays.toDouble(),
+                min: 1,
+                max: 30,
+                divisions: 29,
+                activeColor: AppTheme.primary,
+                inactiveColor: AppTheme.divider,
+                label: '$selectedDays days',
+                onChanged: (v) =>
+                    setLocal(() => selectedDays = v.round()),
+              ),
+              const SizedBox(height: 8),
+              // Confirm button
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    setState(() {
+                      _demoOccasion = selectedOccasion;
+                      _demoDaysAway = selectedDays;
+                    });
+                    _forceRefresh(
+                      occasionName: selectedOccasion,
+                      daysAway:
+                          selectedOccasion != null ? selectedDays : null,
+                    );
+                  },
+                  icon: const Icon(Icons.bolt_rounded, size: 16),
+                  label: Text(
+                    selectedOccasion != null
+                        ? 'Generate for $selectedOccasion'
+                        : 'Regenerate (no occasion)',
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    textStyle: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   String _timeAgo(String? isoDate) {
@@ -154,15 +411,24 @@ class _InsightsScreenState extends State<InsightsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── DEV: Force refresh button ─────────────────────────
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+            // ── DEV: Demo Occasion panel ─────────────────────────
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.error.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(10),
+                border:
+                    Border.all(color: AppTheme.error.withOpacity(0.2)),
+              ),
               child: Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 5, vertical: 2),
                     decoration: BoxDecoration(
-                      color: AppTheme.error.withOpacity(0.1),
+                      color: AppTheme.error.withOpacity(0.12),
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: const Text(
@@ -176,48 +442,65 @@ class _InsightsScreenState extends State<InsightsScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  _forceRefreshing
-                      ? const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              width: 12,
-                              height: 12,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 1.5,
-                                color: AppTheme.error,
+                  Expanded(
+                    child: _forceRefreshing
+                        ? Row(
+                            children: [
+                              const SizedBox(
+                                width: 12,
+                                height: 12,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  color: AppTheme.error,
+                                ),
                               ),
-                            ),
-                            SizedBox(width: 6),
-                            Text(
-                              'Regenerating AI insights…',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: AppTheme.error,
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  _demoOccasion != null
+                                      ? 'Generating for $_demoOccasion…'
+                                      : 'Regenerating AI insights…',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: AppTheme.error,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                            ),
-                          ],
-                        )
-                      : OutlinedButton.icon(
-                          onPressed: _forceRefresh,
-                          icon: const Icon(Icons.bolt_rounded, size: 14),
-                          label: const Text('Force Regenerate'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.error,
-                            side: const BorderSide(color: AppTheme.error),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            visualDensity: VisualDensity.compact,
-                            textStyle: const TextStyle(
+                            ],
+                          )
+                        : Text(
+                            _demoOccasion != null
+                                ? '🎉  $_demoOccasion · $_demoDaysAway day${_demoDaysAway == 1 ? '' : 's'} away'
+                                : 'No occasion set',
+                            style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
+                              color: _demoOccasion != null
+                                  ? AppTheme.primary
+                                  : AppTheme.textSecondary,
                             ),
                           ),
+                  ),
+                  const SizedBox(width: 8),
+                  if (!_forceRefreshing)
+                    OutlinedButton(
+                      onPressed: _showOccasionPicker,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.error,
+                        side: const BorderSide(color: AppTheme.error),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
                         ),
+                      ),
+                      child: const Text('Set Occasion'),
+                    ),
                 ],
               ),
             ),

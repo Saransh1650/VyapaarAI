@@ -96,7 +96,7 @@ which festivals are coming — and acts on it with one tap.
 | Database   | PostgreSQL (via `pg` connection pool)                |
 | Container  | Docker Compose                                       |
 | Port       | 3000 (internal), exposed on host                     |
-| AI Model   | Google Gemini (primary), Groq / Llama 3.1 (fallback) |
+| AI Model   | Amazon Nova (primary), Groq / Llama 3.1 (fallback) |
 | AI Workers | Node.js `worker_threads` (non-blocking)              |
 | Auth       | JWT (access + refresh token pair)                    |
 
@@ -198,7 +198,7 @@ AI_Khata_backend/src/
 ├── config/
 │   ├── database.js   ← pg Pool
 │   ├── env.js        ← dotenv loader
-│   ├── gemini.js     ← callGemini() with Groq fallback
+│   ├── nova.js       ← callNova() with Groq fallback
 │   ├── groq.js       ← Groq/Llama client
 │   ├── init.sql      ← Full DB schema (CREATE TABLE IF NOT EXISTS)
 │   └── initDb.js     ← One-off schema runner
@@ -910,7 +910,7 @@ Status badge colours:
     └─ User can tap "Save this Bill" again
 ```
 
-On the backend, `/bills/upload` creates a bill record with `status: UPLOADED`, then dispatches the `ocrWorker` which processes the image with Gemini Vision, extracts line items, creates a ledger entry, and updates the bill to `COMPLETED`.
+On the backend, `/bills/upload` creates a bill record with `status: UPLOADED`, then dispatches the `ocrWorker` which processes the image with Amazon Nova Vision, extracts line items, creates a ledger entry, and updates the bill to `COMPLETED`.
 
 ---
 
@@ -1152,7 +1152,7 @@ This means: if a bill creation fails, the inventory is never touched (atomically
 1. Image saved to local disk (`/app/uploads`)
 2. `bills` record created with `status: UPLOADED`, `source: 'ocr'`
 3. `ocrWorker` dispatched (worker thread)
-4. Worker sends image to Gemini Vision with updated prompt:
+4. Worker sends image to Amazon Nova Vision with updated prompt:
    - Extracts: merchant, date, total, **`transactionType` (income/expense)**, and per-item **`unit`**
 5. Inside a DB transaction: creates `ledger_entry` + `line_items` (with `unit`) + calls `syncStockAfterBill`
 6. Updates bill `status → COMPLETED`
@@ -1289,19 +1289,38 @@ The AI system has two layers that work together:
 1. **RAG Memory Layer** — a PostgreSQL-backed store of learned shop behaviour (product patterns, product-pair relationships, shop identity insights). This layer grows silently with every transaction and is never visible to the user.
 2. **Guidance Generation Layer** — a Node.js worker that reads from RAG memory + live DB data, builds a rich context, and calls Gemini once per store to produce structured guidance cards.
 
-When enough data exists (≥ 10 ledger entries), the guidance generation layer uses RAG context. When data is thin, it falls back to a simpler inventory-only prompt. The app always sees the same response shape either way.
+All stores, regardless of transaction count, use the same **experience engine path** (RAG-driven). The app always sees the same response shape.
 
 ---
 
 ### 10.1 Insight Types
 
-| Type     | DB `type` column | What it contains                                                                                      |
-| -------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
-| Guidance | `guidance`       | Full structured response: `{ mode, guidance[] }` with stock_check, pattern, event_context, info cards |
+| Type     | DB `type` column | What it contains                                                                          |
+| -------- | ---------------- | ----------------------------------------------------------------------------------------- |
+| Guidance | `guidance`       | Full structured response: `{ mode, philosophy, guidance[] }` with experience engine cards |
 
-> **Replaced:** The old `forecast` and `festival` types were replaced by a single `guidance` type. The worker now makes one AI call per store that combines inventory analysis, trend detection, and festival context into structured guidance cards. Legacy rows (`forecast`, `festival`, `inventory`) are cleaned up automatically on next refresh.
+> **Replaced:** The old `forecast` and `festival` types were replaced by a single `guidance` type. The traditional `generateGuidance()` Gemini-direct path (which produced `pattern`, `event_context`, `info` cards) has been removed — all stores now use the experience engine. Legacy rows (`forecast`, `festival`, `inventory`) are cleaned up automatically on next refresh.
 
 Stored in the `ai_insights` table with `UNIQUE(store_id, type)` — exactly one `guidance` row per store, updated in place.
+
+#### Experience Engine Card Types
+
+| Card type              | When generated                                     | Flutter widget          |
+| ---------------------- | -------------------------------------------------- | ----------------------- |
+| `stock_check`          | Always — if any item is LOW or WATCH               | `_StockCheckCard`       |
+| `dead_stock`           | Items in inventory with no/slowing sales (28 days) | `_DeadStockCard`        |
+| `sales_expansion`      | Cross-sell & missing complementary products found  | `_SalesExpansionCard`   |
+| `momentum_pattern`     | Rising or opportunity products detected            | `_MomentumPatternCard`  |
+| `festival_preparation` | Festival within 10 days (experience-backed)        | `_EventContextCard`     |
+| `festival_experience`  | Festival within 10 days (memory-driven)            | `_EventContextCard`     |
+| `shop_intelligence`    | Always — summary of shop memory maturity           | `_ShopIntelligenceCard` |
+
+#### Response modes
+
+| Mode                | When set                         |
+| ------------------- | -------------------------------- |
+| `EXPERIENCE_NORMAL` | No festival within 10 days       |
+| `EXPERIENCE_EVENT`  | Upcoming festival ≤ 10 days away |
 
 ---
 
@@ -1329,17 +1348,19 @@ AI generation is **never triggered by the app**. It runs under two conditions:
 
 ### 10.3 Worker: `refreshInsights.js`
 
-This is the only file that calls Gemini. It runs in a Node.js worker thread.
+This is the only file that calls Gemini (via the experience engine). It runs in a Node.js worker thread.
 
 **Execution flow:**
 
-1. **Gather data from DB** (all in parallel):
+1. **Update shop memory** — replays the last 7 days of transactions through the learning pipeline (always runs, no minimum transaction count)
+
+2. **Gather data from DB** (all in parallel):
    - `getInventory()` — all stock items for the store: `{ product, quantity, unit }`
    - `getRecentSales()` — top 20 products by sales in the last 28 days, each classified as `rising`, `stable`, `slowing`, or `new` by comparing last-14-day qty to prior-14-day qty
    - `getShopActivity()` — this-week vs last-week transaction count → `recentBusiness` (`growing`/`steady`/`slowing`/`quiet`/`starting`) + top 3 busiest days of week
-   - `getClosestFestival()` — the nearest festival within 45 days from `festivalCalendar.js` → `{ name, daysAway }` (only name and days, no details — AI must infer)
+   - `getClosestFestival()` — the nearest festival within 45 days from `festivalCalendar.js` → `{ name, daysAway }`
 
-2. **Build input JSON** — assembled into the structure the prompt expects:
+3. **Build input JSON** — assembled into the structure the experience engine expects:
 
    ```json
    {
@@ -1352,18 +1373,15 @@ This is the only file that calls Gemini. It runs in a Node.js worker thread.
    }
    ```
 
-3. **Send to Gemini** — single `generateGuidance(input)` call. The prompt dynamically expands in EVENT mode:
-   - **Festival demand analysis step** — the AI must scan every inventory item and decide if demand will spike for the upcoming festival
-   - Each item gets an urgency: `critical` (will stock out → order TODAY), `high` (stock 2-3×), `moderate` (stock extra)
-   - A `demand_note` explains _why_ demand surges (e.g., "Holi sweets need lots of milk")
-   - `stock_check` statuses are **festival-adjusted** — items normally GOOD may become WATCH/LOW when festival demand is factored in
-   - Items not in inventory but festival-relevant get `classification: "opportunity"`
+4. **Always use RAG-driven experience engine** — calls `generateExperienceGuidance(storeId, storeType, input)` unconditionally. The experience engine reads from `shop_memory`, `product_relationships`, and `experience_insights` to build structured guidance cards.
 
-4. **Validate & upsert** — checks response has `mode` + `guidance[]`; falls back gracefully
+5. **Relationship discovery** — always runs `discoverProductRelationships(storeId, 90)` after guidance generation to keep product pairs up to date.
 
-5. **Clean up legacy rows** — deletes old `forecast`/`festival`/`inventory` types from `ai_insights`
+6. **Validate & upsert** — checks response has `mode` + `guidance[]`; falls back gracefully to an info card.
 
-**Fallback when no data:** If both inventory and recentSales are empty, the worker skips the AI call and stores a fallback: `{ mode: "NORMAL", guidance: [{ type: "info", insight: "Keep adding bills..." }] }`
+7. **Clean up legacy rows** — deletes old `forecast`/`festival`/`inventory` types from `ai_insights`.
+
+**Fallback when no data:** If both inventory and recentSales are empty, the worker skips the AI call and stores a fallback: `{ mode: "EXPERIENCE_NORMAL", philosophy: "experience_driven", guidance: [{ type: "info", insight: "Keep adding bills..." }] }`
 
 **`upsertInsight(type, data, ledgerCount)`:**
 
@@ -1377,69 +1395,123 @@ This means: **a failed or empty AI response never overwrites working cached data
 
 ### 10.4 Anti-Hallucination Rules
 
-The new guidance system uses **inventory-first logic** — the AI only sees what the shop actually has and sells. Key constraints:
+The guidance system uses **data-first logic** — the engine only reasons from what the shop actually stocks and sells. Key constraints:
 
-1. **Database is truth** — the prompt explicitly tells the AI: "only reason from the data provided below." No external knowledge about typical store inventories.
-2. **Festival knowledge must be inferred** — the AI only receives `{ name, daysAway }` for festivals. It must internally understand what Holi or Diwali means but ground all recommendations in the shop's actual inventory and sales data.
-3. **Existing products preferred** — in `event_context` cards, items from the shop's inventory get `classification: "existing_product"`. Genuinely new suggestions (items the shop doesn't stock) get `classification: "opportunity"` to clearly signal they're optional.
-4. **Festival demand must be grounded** — the AI is given only `{ name, daysAway }` and the shop's inventory. It must use domain knowledge about festivals (e.g., Holi → sweets → milk/sugar/ghee) but only flag items that actually exist in the shop's inventory as `existing_product`. New suggestions are clearly labeled `opportunity` with a demand note explaining why.
-5. **No numerical predictions** — the prompt forbids sales numbers, percentages, forecasts, and revenue estimates. Only qualitative reasoning is allowed. Stocking guidance uses relative language ("stock 2-3× usual", "keep extra") rather than absolute quantities.
+1. **Database is truth** — all card content is derived from `shop_memory`, `product_relationships`, `experience_insights`, and the live inventory/sales snapshot. No hallucinated generic store advice.
+2. **Dead stock is fact-checked** — `dead_stock` items are those literally present in `stock_items` with quantity > 0 but absent from `line_items` in the past 28 days (or flagged as `slowing` in trend analysis). No guessing.
+3. **Relationship suggestions are evidence-based** — `sales_expansion` and swap ideas in `dead_stock` only appear when actual co-purchase data (`product_relationships` strength ≥ 0.30) backs them up.
+4. **No numerical predictions** — qualitative language only (`"demand is picking up"`, not `"demand increased 23%"`).
+5. **Festival guidance is grounded** — festival cards only appear when a festival is ≤ 10 days away AND relationship memory supports it.
 
 ---
 
-### 10.5 Gemini Prompt (Context-Aware Guidance)
+### 10.5 Experience Engine Cards (Guidance Structure)
 
-A single prompt handles all guidance types. Core structure:
+The experience engine (`synthesizeExperienceGuidance`) builds cards in a fixed priority order:
 
 ```
-You are a shop advisor for a {storeType} retail shop in India. Today is {date}.
+Order 0 — stock_check     (always first, most actionable)
+Order 1 — dead_stock      (capital tied up in non-moving items + swap ideas)
+Order 2 — sales_expansion (cross-sell & missing complementary products)
+Order 3 — momentum_pattern (rising/opportunity products)
+Order 4 — festival_preparation / festival_experience (only if festival ≤ 10 days)
+Order 5 — shop_intelligence (always last, memory maturity summary)
+```
 
-CORE RULES:
-1. Database is truth — only reason from the data provided below.
-2. No numerical predictions.
-3. Think like a shopkeeper's trusted advisor.
-4. Qualitative reasoning only.
+#### `stock_check` card
 
-INPUT DATA: { storeType, todayDate, inventory[], recentSales[], shopActivity, upcomingFestival }
+```json
+{
+  "type": "stock_check",
+  "items": [
+    {
+      "product": "Paracetamol 500mg",
+      "status": "LOW",
+      "reason": "Running critically low — one of your top sellers",
+      "action": "Order immediately"
+    }
+  ]
+}
+```
 
-REASONING STEPS (internal only):
-1. Stock Readiness → classify items: GOOD / WATCH / LOW
-2. Pattern Understanding → rising/slowing/new trends
-3. Festival Demand Analysis (EVENT mode only, daysAway ≤ 10):
-   a) Scan every inventory item — will demand spike for this festival?
-   b) Assign urgency: critical / high / moderate
-   c) Flag opportunity items not in inventory
-   d) Items normally GOOD in stock_check must be bumped to WATCH/LOW if festival demand will drain them
-4. Produce guidance cards
+Statuses: `GOOD` / `WATCH` / `LOW` / `EXCELLENT` / `PRIORITY` / `MISSING`
+Thresholds differ for strength products (tighter: ≤ 3 = LOW, ≤ 10 = WATCH) vs active products (≤ 2 = LOW, ≤ 7 = WATCH) vs inactive (≤ 0 = LOW, ≤ 5 = WATCH). Card is skipped if all items are GOOD.
 
-OUTPUT (NORMAL): { mode: "NORMAL", guidance: [
-  { type: "stock_check", items: [{ product, status, reason, action }] },
-  { type: "pattern", insight, action },
-  { type: "info", insight }
-] }
+#### `dead_stock` card
 
-OUTPUT (EVENT): { mode: "EVENT", guidance: [
-  { type: "stock_check", items: [{ product, status, reason, action }] },   ← festival-adjusted statuses
-  { type: "pattern", insight, action },
-  { type: "event_context", event, summary, items: [
-    { product, urgency, demand_note, classification, action }
-  ] },
-  { type: "info", insight }
-] }
+```json
+{
+  "type": "dead_stock",
+  "insight": "Items not moving — free up capital by swapping with faster-selling products",
+  "deadItems": [
+    {
+      "product": "Aspirin 300mg",
+      "quantity": 45,
+      "unit": "strips",
+      "status": "no_sales"
+    }
+  ],
+  "swapIdeas": [
+    {
+      "product": "Cetirizine 10mg",
+      "reason": "Customers buying Paracetamol often want Cetirizine",
+      "trigger": "Paracetamol 500mg"
+    }
+  ]
+}
+```
 
-event_context fields:
-- summary: one-line banner text (e.g. "Holi is tomorrow — here's what will fly off the shelves")
-- urgency: "critical" (order TODAY) / "high" (stock 2-3×) / "moderate" (stock extra)
-- demand_note: WHY demand surges + stocking guidance
-- classification: "existing_product" / "opportunity"
-- Items sorted: critical first → high → moderate
+`status`: `no_sales` (zero transactions in 28 days) or `slowing` (declining trend). Swap ideas come from `missingComplementary` relationships + rising/new products not yet stocked.
 
-CARD RULES:
-- stock_check: always include if inventory exists, max 8 items. In EVENT mode, statuses factor in festival demand.
-- pattern: 0-2 cards if trends are notable
-- event_context: only when mode is EVENT. Must comprehensively flag every inventory item affected by the festival.
-- info: when data is thin or as a general tip
-- Tone: short, shopkeeper-friendly, no jargon
+#### `sales_expansion` card
+
+```json
+{
+  "type": "sales_expansion",
+  "insight": "Revenue growth opportunities from your customer patterns",
+  "crossSell": [
+    {
+      "trigger": "Milk",
+      "suggest": "Curd",
+      "reason": "72% of customers buying Milk also want Curd",
+      "action": "Display together"
+    }
+  ],
+  "missingItems": [
+    {
+      "existing": "Bread",
+      "missing": "Butter",
+      "opportunity": "...",
+      "action": "Consider stocking Butter"
+    }
+  ]
+}
+```
+
+#### `momentum_pattern` card
+
+```json
+{
+  "type": "momentum_pattern",
+  "insight": "New momentum detected in Vitamin C, Zinc — rising demand",
+  "action": "Stock up before demand peaks",
+  "products": [{ "product": "Vitamin C", "trend": "rising" }]
+}
+```
+
+#### `shop_intelligence` card
+
+```json
+{
+  "type": "shop_intelligence",
+  "insight": "Your shop has developed strong behavioral patterns (42 product memories, 18 relationships). Current momentum: growing",
+  "memoryStrength": "experienced",
+  "businessMomentum": "growing",
+  "nextActions": [
+    "Explore cross-sell for your top 3 pairs",
+    "Review dead stock quarterly"
+  ]
+}
 ```
 
 ---
@@ -1452,6 +1524,16 @@ This is enforced at every layer:
 - **`POST /ai/insights/refresh`** was deliberately removed from the routes file (comment left as documentation)
 - **`InsightsScreen._onPullRefresh()`** only calls `_loadInsights()` (a GET), never posts to any AI endpoint
 - **`DashboardHomeContent._loadUrgentAlerts()`** only reads from `/ai/insights` GET
+
+**DEV-only exception — Force Refresh:**
+
+`POST /ai/insights/force-refresh?storeId=&storeType=` (authenticated) — exposed in the Flutter `InsightsScreen` as a red ⚡ DEV button. It:
+
+1. `DELETE FROM ai_insights WHERE store_id=$1` — clears the cache
+2. Clears the in-flight lock (`refreshInFlight.delete(storeId)`)
+3. Calls `triggerInsightsRefresh()` to spawn a fresh worker immediately
+
+This endpoint exists only for development/testing and should be removed before production.
 
 ---
 
@@ -1527,11 +1609,11 @@ learnFromTransaction()
 
 #### Trigger B — Refresh worker (every AI refresh cycle)
 
-`refreshInsights.js` calls `updateShopMemory()` which replays the last 7 days of transactions (up to 50) through the learning pipeline. This acts as a catch-up for any missed real-time triggers and keeps memory fresh.
+`refreshInsights.js` calls `updateShopMemory()` which replays the last 7 days of transactions (up to 50) through the learning pipeline. This always runs — there is no minimum transaction count. This acts as a catch-up for any missed real-time triggers and keeps memory fresh.
 
 #### Trigger C — Scheduled relationship discovery
 
-When `refreshInsights.js` runs and ledger count ≥ 20, it also fires `discoverProductRelationships(storeId, 90)` in the background (non-blocking). This re-runs the full analytical SQL suite across 90 days of history to catch patterns that incremental learning may have missed.
+When `refreshInsights.js` runs, it also fires `discoverProductRelationships(storeId, 90)` after every guidance generation (no ledger threshold). This re-runs the full analytical SQL suite across 90 days of history to catch patterns that incremental learning may have missed.
 
 ---
 
@@ -1590,7 +1672,7 @@ After all four run, results are deduplicated (same pair from multiple discovery 
 
 ### 10.10 Experience Engine (Retrieval + Generation)
 
-`src/ai/experienceEngine.js` is the bridge between raw memory and AI guidance. It runs inside `refreshInsights.js` when ledger count ≥ 10.
+`src/ai/experienceEngine.js` is the bridge between raw memory and AI guidance. It always runs inside `refreshInsights.js` — there is no transaction count threshold.
 
 #### Priority Hierarchy
 
@@ -1654,9 +1736,8 @@ This context allows Gemini to say things like _"Curd is missing from your invent
 #### Fallback path
 
 ```
-ledger count < 10   → traditional generateGuidance() (inventory + sales only, no RAG)
-ledger count ≥ 10   → generateExperienceGuidance() (full RAG context)
-RAG call fails      → falls back to traditional generateGuidance()
+All stores       → generateExperienceGuidance() (full RAG context, always)
+RAG call fails   → stores info card: { mode: 'EXPERIENCE_NORMAL', guidance: [{ type: 'info' }] }
 ```
 
 ---
@@ -1685,17 +1766,21 @@ RAG call fails      → falls back to traditional generateGuidance()
  Every 8 hours (or threshold hit):
  refreshInsights.js worker
        │
-       ├── updateShopMemory()  (last 7 days replay)  ──► shop_memory
+       ├── updateShopMemory()  (last 7 days replay, always)  ──► shop_memory
        │
-       ├── if ledger ≥ 10:
-       │     generateExperienceGuidance()
-       │           │
-       │           ├── READ shop_memory, product_relationships, experience_insights
-       │           ├── ASSEMBLE rich context (RAG priority 1→4)
-       │           └── CALL Gemini → structured guidance cards
+       ├── generateExperienceGuidance()  (all stores, always)
+       │         │
+       │         ├── READ shop_memory, product_relationships, experience_insights
+       │         ├── ASSEMBLE rich context (RAG priority 1→4)
+       │         │     0. buildStockCheckCard()  → stock_check
+       │         │     1. buildDeadStockCard()   → dead_stock
+       │         │     2. salesExpansion         → sales_expansion
+       │         │     3. contextualGuidance     → momentum_pattern
+       │         │     4. festivalGuidance       → festival_preparation / festival_experience
+       │         │     5. shopIntelligence       → shop_intelligence
+       │         └── CALL Gemini → structured guidance cards
        │
-       ├── if ledger < 10:
-       │     generateGuidance()  (inventory-only prompt)
+       ├── discoverProductRelationships(storeId, 90)  (always) ──► product_relationships
        │
        └── upsertInsight('guidance', result) ──► ai_insights table
 
@@ -1987,13 +2072,13 @@ CREATE INDEX idx_experience_insights_store    ON experience_insights(store_id);
 - The app is **read-only** with respect to AI — it can only call `GET /ai/insights`
 - AI refresh is triggered by time (3× daily) or activity (every 20 new ledger entries), never by the user
 - Bad/empty AI responses are silently discarded; the cache is never overwritten with junk data
-- **Context-Aware Guidance**: single AI call per store that combines inventory, trends, and festival context into structured guidance cards (stock_check, pattern, event_context, info)
+- **Unified experience engine**: all stores always use `generateExperienceGuidance()` (RAG-driven). The old inventory-only Gemini path has been removed. Cards produced: `stock_check`, `dead_stock`, `sales_expansion`, `momentum_pattern`, `festival_preparation`, `festival_experience`, `shop_intelligence`
 - **No numerical predictions**: the AI is explicitly forbidden from returning sales numbers, percentages, forecasts, or revenue estimates — qualitative reasoning only
-- **Inventory-first logic**: AI evaluates existing stock → detects patterns → checks festival relevance → suggests opportunities. New items are clearly labeled as "opportunity"
-- **Festival demand surge**: In EVENT mode, the prompt forces the AI to scan every inventory item for festival relevance, assign urgency levels (critical/high/moderate), and provide demand notes explaining why demand spikes. Stock health statuses are festival-adjusted — an item "GOOD" normally may become "WATCH" or "LOW" when festival demand is factored in.
-- Festival knowledge is inferred from name alone — the AI only receives `{ name, daysAway }`, not cultural details. The AI must use domain knowledge about Indian festivals to identify relevant products.
+- **Dead stock detection**: items in inventory with quantity > 0 but zero transactions in 28 days (or `slowing` trend) appear in the `dead_stock` card with swap suggestions from relationship data
+- **Festival guidance**: when a festival is ≤ 10 days away, mode switches to `EXPERIENCE_EVENT` and a festival card is generated using shop relationship memory
 - AI workers are staggered 10 seconds apart when multiple stores refresh at the same time (scheduler runs)
 - In-flight deduplication: `refreshInFlight` Set prevents two simultaneous refreshes for the same store
+- **DEV force-refresh**: `POST /ai/insights/force-refresh` clears the cache and immediately spawns a new worker; exposed in Flutter as a red ⚡ button for testing only
 
 ### RAG Memory System
 
@@ -2002,10 +2087,9 @@ CREATE INDEX idx_experience_insights_store    ON experience_insights(store_id);
 - After 5+ observations, `memory_data` JSONB is **merged** (new `||` old) rather than replaced, preserving historical context.
 - Real-time learning (`learnFromNewTransaction`) is **fire-and-forget** — errors are caught and logged but never block the bill-save flow.
 - Deep learning (`discoverProductRelationships`, `generateExperienceInsights`) runs via `setImmediate()` at transaction count milestones (20, 50, 100, 200, 500) — it is non-blocking and never affects response time of a bill save.
-- The `refreshInsights.js` worker replays the last 7 days of transactions on every run as a catch-up mechanism. Memory is eventually consistent even if real-time triggers fail.
+- The `refreshInsights.js` worker replays the last 7 days of transactions on every run as a catch-up mechanism (no minimum transaction count). Memory is eventually consistent even if real-time triggers fail.
 - Relationship discovery requires minimum co-occurrence thresholds (≥3 for frequent pairs, ≥2 for sequential/seasonal) before a relationship is stored — prevents noise from one-off coincidences.
-- RAG guidance is only used when `ledgerCount ≥ 10`. Below that threshold the system falls back to inventory-only guidance to avoid drawing conclusions from insufficient data.
-- Relationship discovery is only triggered when `ledgerCount ≥ 20`, ensuring enough transaction history for meaningful market basket analysis.
+- Relationship discovery (`discoverProductRelationships`) runs on every refresh cycle — there is no `ledgerCount` threshold for it.
 - The `memory_usage` table exists for future feedback-loop work (confirming or violating patterns based on shop owner actions) but is not yet wired to any active logic.
 
 ### UX Philosophy
