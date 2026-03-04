@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:go_router/go_router.dart';
@@ -44,6 +45,18 @@ class AiKhataApp extends StatelessWidget {
           theme: AppTheme.light,
           debugShowCheckedModeBanner: false,
           routerConfig: _buildRouter(auth),
+          // On web: constrain the entire UI to a mobile viewport centred on screen
+          builder: kIsWeb
+              ? (context, child) => ColoredBox(
+                    color: const Color(0xFF121212),
+                    child: Center(
+                      child: SizedBox(
+                        width: 430,
+                        child: ClipRect(child: child!),
+                      ),
+                    ),
+                  )
+              : null,
         ),
       ),
     );
