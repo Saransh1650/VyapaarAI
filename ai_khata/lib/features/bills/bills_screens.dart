@@ -1,8 +1,9 @@
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:dio/dio.dart';
-import 'dart:io';
 import '../../core/api_client.dart';
 import '../../core/theme.dart';
 import '../../core/constants.dart';
@@ -325,7 +326,8 @@ class BillScannerScreen extends StatefulWidget {
 }
 
 class _BillScannerScreenState extends State<BillScannerScreen> {
-  File? _image;
+  XFile? _image;
+  Uint8List? _imageBytes;
   bool _uploading = false;
   bool _done = false;
   String? _error;
@@ -336,15 +338,17 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
     });
     
     try {
-      final file = await ImageUtils.pickImage(
+      final xfile = await ImageUtils.pickImage(
         source: src,
         imageQuality: 85,
         preferredCamera: CameraDevice.rear,
       );
       
-      if (file != null) {
+      if (xfile != null) {
+        final bytes = await xfile.readAsBytes();
         setState(() {
-          _image = file;
+          _image = xfile;
+          _imageBytes = bytes;
           _error = null;
           _done = false;
         });
@@ -393,7 +397,11 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
     try {
       final auth = context.read<AuthService>();
       final formData = FormData.fromMap({
-        'image': await MultipartFile.fromFile(_image!.path),
+        'image': MultipartFile.fromBytes(
+          _imageBytes!,
+          filename: _image!.name,
+          contentType: DioMediaType('image', 'jpeg'),
+        ),
         if (auth.storeId != null) 'storeId': auth.storeId,
       });
       await ApiClient.instance.dio.post(
@@ -588,12 +596,12 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
       Expanded(
         child: ClipRRect(
           borderRadius: BorderRadius.circular(16),
-          child: Image.file(_image!, fit: BoxFit.contain),
+          child: Image.memory(_imageBytes!, fit: BoxFit.contain),
         ),
       ),
       const SizedBox(height: 12),
       TextButton.icon(
-        onPressed: () => setState(() => _image = null),
+        onPressed: () => setState(() { _image = null; _imageBytes = null; }),
         icon: const Icon(Icons.refresh_rounded),
         label: const Text('Use a different image'),
       ),

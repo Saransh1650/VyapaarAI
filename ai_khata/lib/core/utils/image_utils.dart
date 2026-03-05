@@ -1,10 +1,9 @@
-import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 class ImageUtils {
-  /// Picks an image with proper HEIC format handling
-  static Future<File?> pickImage({
+  /// Picks an image. Returns an XFile — works on web, iOS, and Android.
+  static Future<XFile?> pickImage({
     required ImageSource source,
     int imageQuality = 85,
     CameraDevice preferredCamera = CameraDevice.rear,
@@ -12,7 +11,6 @@ class ImageUtils {
     try {
       final picker = ImagePicker();
       
-      // First attempt with standard picker
       final picked = await picker.pickImage(
         source: source,
         imageQuality: imageQuality,
@@ -21,25 +19,16 @@ class ImageUtils {
       
       if (picked == null) return null;
       
-      final file = File(picked.path);
-      
-      // Verify file exists and is readable
-      if (!await file.exists()) {
-        throw Exception('Image file not found after selection');
-      }
-      
-      // Check if it's a HEIC file (by extension or content)
-      if (picked.path.toLowerCase().contains('.heic') || 
+      // Check if it's a HEIC file (by path extension — native only)
+      if (picked.path.toLowerCase().contains('.heic') ||
           picked.path.toLowerCase().contains('.heif')) {
-        // For HEIC files, we'll need to handle them specially
-        // For now, throw a user-friendly error
         throw PlatformException(
           code: 'unsupported_format',
           message: 'HEIC format detected. Please convert to JPEG or use camera to take a new photo.',
         );
       }
-      
-      return file;
+
+      return picked;
       
     } on PlatformException catch (e) {
       if (e.code == 'invalid_image' || 
