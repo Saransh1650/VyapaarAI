@@ -617,10 +617,33 @@ class _InsightsScreenState extends State<InsightsScreen> {
       return it;
     }).toList();
 
+    // Also map top-level suggestedNewItems → opportunity items so they render in the card.
+    // This covers both old cached responses (where they were separate) and new ones.
+    final suggestedRaw = (card['suggestedNewItems'] as List?) ?? [];
+    final opportunityItems = suggestedRaw
+        .where((s) {
+          // Skip any that are already present in the normalized items list
+          final name = (s['product'] as String? ?? '').toLowerCase();
+          return name.isNotEmpty &&
+              !normalized.any(
+                (n) => (n['product'] as String? ?? '').toLowerCase() == name,
+              );
+        })
+        .map((s) {
+          final it = Map<String, dynamic>.from(s as Map);
+          it['demand_note'] = it['reason'] ?? '';
+          it['action'] =
+              'Consider stocking for ${card['event'] ?? 'the festival'} — customers will look for this';
+          it['classification'] = 'opportunity';
+          it['urgency'] ??= 'moderate';
+          return it;
+        })
+        .toList();
+
     return {
       ...card,
       'type': 'event_context',
-      'items': normalized,
+      'items': [...normalized, ...opportunityItems],
     };
   }
 }
@@ -1254,7 +1277,16 @@ class _EventItemRow extends StatelessWidget {
     final action = item['action'] as String? ?? '';
     final isOpportunity = classification == 'opportunity';
 
-    final cfg = _urgencyConfig[urgency] ?? _urgencyConfig['moderate']!;
+    // Opportunity items (not in inventory) use teal/success colour scheme
+    // so they are visually distinct from "stock up" items.
+    final cfg = isOpportunity
+        ? (
+            color: AppTheme.success,
+            icon: Icons.add_shopping_cart_rounded,
+            label: '✨ Source It',
+            bgOpacity: 0.06,
+          )
+        : (_urgencyConfig[urgency] ?? _urgencyConfig['moderate']!);
 
     return Container(
       margin: const EdgeInsets.fromLTRB(8, 6, 8, 2),
@@ -1295,7 +1327,7 @@ class _EventItemRow extends StatelessWidget {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        isOpportunity ? '✨ New' : cfg.label,
+                        isOpportunity ? '✨ Source It' : cfg.label,
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
